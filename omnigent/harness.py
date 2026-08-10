@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -62,11 +63,15 @@ def load_harnesses(cfg: dict | None = None) -> dict[str, Harness]:
     return out
 
 
-def run(harness: Harness, prompt: str, project: str | None = None, timeout: int = 1800) -> Result:
-    """Run one harness headlessly. Blocks until the agent finishes or times out.
+def run(harness: Harness, prompt: str, project: str | None = None, timeout: int = 1800,
+        on_line=None, on_start=None) -> Result:
+    """Run one harness headlessly, streaming stdout line-by-line.
 
-    # ponytail: captures output (no live streaming); add --stream if long runs
-    # with no feedback become annoying in practice.
+    Backward compatible: still returns a Result with the full captured output, so
+    existing callers (CLI, Flow) work unchanged. Optional hooks:
+      on_line(str)      called per output line as it arrives (live streaming)
+      on_start(Popen)   receives the process handle (for stop/kill)
+    A watchdog enforces the hard timeout even if the process goes silent.
     """
     if not harness.available:
         return Result(harness.name, False,
@@ -77,18 +82,42 @@ def run(harness: Harness, prompt: str, project: str | None = None, timeout: int 
         a.replace("{prompt}", prompt).replace("{project}", proj) for a in harness.args
     ]
     start = time.monotonic()
+    lines: list[str] = []
     try:
-        p = subprocess.run(argv, cwd=proj, capture_output=True, text=True, timeout=timeout)
-        out = (p.stdout or "").strip()
-        if p.stderr and p.stderr.strip():
-            out = (out + "\n[stderr] " + p.stderr.strip()).strip()
-        return Result(harness.name, p.returncode == 0, out, time.monotonic() - start, p.returncode)
-    except subprocess.TimeoutExpired:
-        return Result(harness.name, False, f"timed out after {timeout}s",
-                      time.monotonic() - start, 124)
+        p = subprocess.Popen(argv, cwd=proj, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, bufsize=1,
+                             encoding="utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
-        return Result(harness.name, False, f"error running '{harness.name}': {e}",
+        return Result(harness.name, False, f"error launching '{harness.name}': {e}",
                       time.monotonic() - start, 1)
+    if on_start:
+        try: on_start(p)
+        except Exception: pass
+    timed_out = {"v": False}
+    def _kill():
+        timed_out["v"] = True
+        try: p.kill()
+        except Exception: pass
+    watchdog = threading.Timer(timeout, _kill)
+    watchdog.start()
+    try:
+        for line in p.stdout:
+            line = line.rstrip("\r\n")
+            lines.append(line)
+            if on_line:
+                try: on_line(line)
+                except Exception: pass
+        p.wait()
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"[error: {e}]")
+    finally:
+        watchdog.cancel()
+    if timed_out["v"]:
+        lines.append(f"[killed: exceeded {timeout}s timeout]")
+    rc = p.returncode if p.returncode is not None else 1
+    out = "\n".join(lines).strip()
+    ok = (rc == 0) and not timed_out["v"]
+    return Result(harness.name, ok, out, time.monotonic() - start, 124 if timed_out["v"] else rc)
 
 
 if __name__ == "__main__":

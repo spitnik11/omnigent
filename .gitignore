@@ -5,3 +5,5 @@ __pycache__/
 build/
 dist/
 .env
+omni.db
+.worktrees/

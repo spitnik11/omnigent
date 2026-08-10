@@ -1,0 +1,12 @@
+# Package + run the orchestrator. See Dockerfile header: harness CLIs are not
+# baked in. This compose file is for the orchestrator-only / CI use case.
+services:
+  omnigent:
+    build: .
+    image: omnigent:latest
+    volumes:
+      - ./harnesses.yaml:/app/harnesses.yaml:ro   # tune routing without rebuild
+      - ${PROJECTS_DIR:-./projects}:/projects       # your code lives here
+    # Example one-shot:
+    #   docker compose run --rm omnigent run "@claude explain this repo" --project /projects/foo
+    command: ["list"]

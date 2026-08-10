@@ -1,0 +1,38 @@
+# Omnigent harness registry — the single extension seam.
+# Add a provider = add an entry here. Nothing else needs to change.
+# {prompt} and {project} are substituted at run time. Availability is
+# auto-detected via `detect` (a command that must resolve on PATH);
+# missing harnesses degrade gracefully (listed unavailable, never crash).
+
+harnesses:
+  claude:
+    bin: claude
+    detect: claude
+    # Claude Code runs in the project cwd; headless via -p.
+    # Full hands-off. Drop to acceptEdits (or default) to reintroduce guardrails.
+    args: ["-p", "{prompt}", "--permission-mode", "bypassPermissions"]
+
+  grok:
+    bin: grok
+    detect: grok
+    # Grok Build TUI headless: -p prints and exits; --cwd targets the project.
+    # Full hands-off. Drop to acceptEdits (or default) to reintroduce guardrails.
+    args: ["-p", "{prompt}", "--cwd", "{project}", "--permission-mode", "bypassPermissions"]
+
+  codex:
+    bin: codex
+    detect: codex
+    # OpenAI Codex CLI non-interactive (codex exec). Full hands-off equivalent:
+    # bypass approvals+sandbox; skip-git-repo-check lets it run in any dir.
+    # For guardrails instead, use: ["exec", "-s", "workspace-write", "{prompt}"].
+    args: ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "{prompt}"]
+
+router:
+  # Used when no explicit harness is given (--harness X or a leading "@name ").
+  default: claude
+  # First rule whose keyword appears in the task (and whose harness is
+  # available) wins. Tune freely; order matters.
+  rules:
+    grok: ["search", "web", "research", "latest", "news", "current", "browse"]
+    codex: ["refactor", "unit test", "pytest", "python script", "debug", "type error"]
+    claude: ["architect", "design", "explain", "review", "plan", "document"]

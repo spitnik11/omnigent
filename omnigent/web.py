@@ -129,6 +129,8 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
       <div id="tasks"><div class="task-row">select a run</div></div>
       <div class="side-label">Agents</div>
       <div id="agents"></div>
+      <div class="side-label">Knowledge</div>
+      <div id="knowledge"><div class="task-row" style="color:var(--subtle)">—</div></div>
     </div>
   </nav>
   <main>
@@ -171,6 +173,7 @@ const EVMAP={
   INTEGRATION_CONFLICT:['✕','ev bad','conflict'], VALIDATION_COMPLETED:['▣','ev ok','validation'],
   RUN_READY:['★','ev accent','ready for review'], RUN_APPROVED:['✓','ev ok','run approved'],
   TASK_FAILED:['✕','ev bad','failed'], REVISION:['↻','ev warn','revision'],
+  CONTEXT_RETRIEVED:['◇','ev','knowledge'], MEMORY_WRITTEN:['✎','ev ok','memory saved'],
 };
 const STATUSDOT={PLANNING:'◇',RUNNING:'●',REVIEWING:'◈',INTEGRATING:'⇢',
   WAITING_FOR_USER:'★',COMPLETED:'✓',FAILED:'✕',CANCELLED:'✕',
@@ -188,7 +191,8 @@ function renderFeed(item){
     const [g,cls,label]=EVMAP[item.event]||['·','ev',item.event.toLowerCase()];
     const tsk=item.payload&&item.payload.commit?(' '+String(item.payload.commit).slice(0,8)):'';
     const findings=(item.payload&&item.payload.findings||[]).slice(0,2).map(f=>' — '+f).join('');
-    line(`<span class="who sys"></span><span class="txt ${cls}"><span class="g">${g}</span>${esc(label)}${item.agent?(' · '+esc(item.agent)):''}${esc(tsk)}${esc(findings)}</span>`);
+    const cnt=(item.event==='CONTEXT_RETRIEVED'&&item.payload&&item.payload.count)?(' · '+item.payload.count+' sources'):'';
+    line(`<span class="who sys"></span><span class="txt ${cls}"><span class="g">${g}</span>${esc(label)}${item.agent?(' · '+esc(item.agent)):''}${esc(tsk)}${esc(cnt)}${esc(findings)}</span>`);
   }
 }
 
@@ -199,7 +203,11 @@ async function loadState(){
     `<div class="agent-row"><span class="dot" style="color:${x.available?'var(--ok)':'var(--subtle)'}">●</span>
       <span class="agent-chip" style="color:var(--${n})">${n}</span>
       <span style="color:var(--subtle);font-size:11px">${x.available?'available':'offline'}</span></div>`).join('');
-  const st=await api('/api/state');if(st)renderRuns(st.runs);
+  const st=await api('/api/state');if(!st)return; renderRuns(st.runs);
+  const kn=st.knowledge||{}; const kEl=$('#knowledge');
+  if(kEl) kEl.innerHTML = kn.enabled
+    ? `<div class="task-row"><span class="dot" style="color:var(--ok)">●</span>${kn.documents||0} docs · ${(kn.sources||[]).length} sources</div>`
+    : `<div class="task-row" style="color:var(--subtle)">disabled</div>`;
 }
 function renderRuns(runs){
   $('#runs').innerHTML=runs.length?runs.map(r=>{

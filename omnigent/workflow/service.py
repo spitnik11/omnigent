@@ -26,12 +26,30 @@ def _slug(s: str) -> str:
 
 
 class WorkflowService:
-    def __init__(self, store: Store | None = None, mock: bool = False, adapter_factory=None):
+    def __init__(self, store: Store | None = None, mock: bool = False, adapter_factory=None,
+                 knowledge=None):
         self.store = store or Store()
         self.mock = mock
         self.logs: dict[str, list[str]] = {}   # assignment_id -> live output lines
         # injectable so tests can script agent behaviour (revision loop, etc.)
         self._adapter = adapter_factory or (lambda agent: get_adapter(agent, mock=self.mock))
+        # Optional RAG. None = today's exact behaviour. Never allowed to fail a run.
+        self.knowledge = knowledge
+
+    def _project_name(self, run: dict) -> str:
+        proj = self.store.get("projects", run["project_id"])
+        return (proj["name"] or "").lower() if proj else ""
+
+    def _inject_task_context(self, task: dict, run: dict, agent: str) -> dict:
+        """Attach retrieved knowledge to a task copy + emit CONTEXT_RETRIEVED. No-op if disabled."""
+        if not self.knowledge:
+            return task
+        ctx, prov = self.knowledge.context_for_task(task, project=self._project_name(run), goal=run["goal"])
+        if not ctx:
+            return task
+        self.store.event(run["id"], "CONTEXT_RETRIEVED", task["id"], agent,
+                         {"sources": prov, "count": len(prov)})
+        return {**task, "_knowledge": ctx}
 
     # -- creation ----------------------------------------------------------
     def create_project(self, name, repo_path, repository_url="", default_branch="main") -> dict:
@@ -125,6 +143,7 @@ class WorkflowService:
             if on_line:
                 on_line(agent, task["id"], line)
 
+        task = self._inject_task_context(task, run, agent)
         adapter = self._adapter(agent)
         result = adapter.run(task, assignment["worktree_path"], run["integration_branch"], on_line=sink)
 
@@ -195,10 +214,18 @@ class WorkflowService:
         commit, implementer = asg["commit_sha"], asg["agent"]
         self.store.update("tasks", task["id"], status=TaskStatus.REVIEWING)
         diff = self._diff(task, commit)
+        rtask = task
+        if self.knowledge:
+            rctx, rprov = self.knowledge.context_for_review(
+                task, changed_files=task.get("ownership"), project=self._project_name(run))
+            if rctx:
+                self.store.event(run["id"], "CONTEXT_RETRIEVED", task["id"], None,
+                                 {"sources": rprov, "count": len(rprov), "phase": "review"})
+                rtask = {**task, "_knowledge": rctx}
         for r in [a for a in AGENTS if a != implementer]:
             self.store.event(run["id"], "REVIEW_STARTED", task["id"], r, {"commit": commit})
             cb = (lambda line, a=r: on_line(a, task["id"], line)) if on_line else None
-            rr = self._adapter(r).review(task, diff, commit, on_line=cb, cwd=proj["repo_path"])
+            rr = self._adapter(r).review(rtask, diff, commit, on_line=cb, cwd=proj["repo_path"])
             self.store.insert("reviews", {
                 "id": new_id("rev"), "task_id": task["id"], "assignment_id": asg["id"],
                 "reviewer_agent": r, "reviewed_commit_sha": commit, "verdict": rr.verdict,
@@ -247,6 +274,7 @@ class WorkflowService:
         def sink(line):
             self.logs.setdefault(asg["id"], []).append(line)
             if on_line: on_line(agent, task["id"], line)
+        t2 = self._inject_task_context(t2, run, agent)
         result = self._adapter(agent).run(t2, wt, run["integration_branch"], on_line=sink)
         self.store.update("assignments", asg["id"], commit_sha=result.commit_sha,
                           files_changed=result.files_changed, finished_at=now(),
@@ -316,7 +344,40 @@ class WorkflowService:
     def approve_run(self, run_id: str) -> dict:
         self.store.update("runs", run_id, status=RunStatus.COMPLETED, completed_at=now())
         self.store.event(run_id, "RUN_APPROVED", None, None, {})
+        self._write_run_memory(run_id)
         return self.run_summary(run_id)
+
+    def _write_run_memory(self, run_id: str) -> None:
+        """Deterministic factual run summary → Omni memory (Obsidian _Omni). Non-fatal."""
+        if not self.knowledge:
+            return
+        try:
+            run = self.store.get("runs", run_id)
+            proj = self.store.get("projects", run["project_id"])
+            tasks = self.store.query("tasks", "run_id=?", (run_id,))
+            lines = [f"# {run['goal']}", "", f"Project: {proj['name'] if proj else ''}",
+                     f"Run: {run_id}", ""]
+            commits = []
+            for t in tasks:
+                asg = self._latest_impl(t) or {}
+                sha = asg.get("commit_sha") or ""
+                if sha:
+                    commits.append(sha)
+                verds = ", ".join(f"{r['reviewer_agent']}:{r['verdict']}"
+                                  for r in self.store.query("reviews", "task_id=?", (t["id"],))) or "—"
+                lines += [f"## {t['title']} — {t['status']}",
+                          f"- agent: {asg.get('agent', '—')}",
+                          f"- commit: {sha[:8] or '—'} ({asg.get('files_changed', 0)} files)",
+                          f"- reviews: {verds}", ""]
+            from ..knowledge.types import MemoryRecord
+            uri = self.knowledge.write_memory(MemoryRecord(
+                kind="run-summary", project=(proj["name"].lower() if proj else "global"),
+                title=f"{run['goal']} {run_id}", body="\n".join(lines),
+                run_id=run_id, status="generated", source_commits=commits))
+            if uri:
+                self.store.event(run_id, "MEMORY_WRITTEN", None, None, {"uri": uri})
+        except Exception:
+            pass
 
     # -- driver ------------------------------------------------------------
     def drive(self, run_id: str, on_line=None, max_revisions: int = 1, max_cycles: int = 8) -> dict:

@@ -6,4 +6,6 @@ build/
 dist/
 .env
 omni.db
+knowledge.db
 .worktrees/
+.omni/

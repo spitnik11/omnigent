@@ -48,9 +48,19 @@ class Runner:
     def __init__(self):
         self.store = Store()
         self.store.on_event = self._on_event
-        self.svc_real = WorkflowService(store=self.store, mock=False)
-        self.svc_mock = WorkflowService(store=self.store, mock=True)
+        self.knowledge = self._load_knowledge()
+        self.svc_real = WorkflowService(store=self.store, mock=False, knowledge=self.knowledge)
+        self.svc_mock = WorkflowService(store=self.store, mock=True, knowledge=self.knowledge)
         self.feeds: dict[str, list[dict]] = {}
+
+    def _load_knowledge(self):
+        try:
+            from ..knowledge.config import load_config
+            from ..knowledge.service import KnowledgeService
+            repos = [(p["name"], p["repo_path"]) for p in self.store.query("projects") if p.get("repo_path")]
+            return KnowledgeService.load(load_config(), repo_paths=repos)
+        except Exception:
+            return None
 
     def _push(self, run_id, item):
         self.feeds.setdefault(run_id, []).append({**item, "seq": len(self.feeds.get(run_id, []))})
@@ -77,11 +87,21 @@ class Runner:
         for t in (tasks or [{"title": goal}]):
             svc.create_task(run["id"], t["title"], description=t.get("description", ""),
                             agent=t.get("agent"), acceptance_criteria=t.get("acceptance", []))
+        if self.knowledge:
+            try:
+                self.knowledge.add_repo(proj["name"], proj["repo_path"])
+            except Exception:
+                pass
 
         def on_line(agent, task_id, line):
             self._push(run["id"], {"type": "output", "agent": agent, "task": task_id, "line": line})
 
         def drive():
+            if self.knowledge:
+                try:
+                    self.knowledge.sync()
+                except Exception:
+                    pass
             self._push(run["id"], {"type": "output", "agent": "omni",
                                    "line": f"Run started: {goal}"})
             try:
@@ -112,8 +132,10 @@ RUNNER = Runner()
 # --- routes ---------------------------------------------------------------
 
 async def api_state(_r):
+    kn = RUNNER.knowledge
     return JSONResponse({"runs": RUNNER.list_runs(),
-                         "projects": RUNNER.store.query("projects")})
+                         "projects": RUNNER.store.query("projects"),
+                         "knowledge": (kn.status() if kn else {"enabled": False})})
 
 async def api_create(request):
     d = await request.json()

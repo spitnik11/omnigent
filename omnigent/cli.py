@@ -72,6 +72,32 @@ def cmd_web(args) -> int:
     return 0
 
 
+def cmd_knowledge(args) -> int:
+    from .knowledge.service import KnowledgeService
+    ks = KnowledgeService.load()
+    if not ks:
+        print("knowledge: disabled — set `enabled: true` in knowledge.yaml and "
+              "OMNI_OBSIDIAN_VAULT, then `omnigent knowledge sync`.")
+        return 0
+    if args.action == "sync":
+        print("indexed:", ks.sync())
+    elif args.action == "status":
+        s = ks.status()
+        print(f"sources: {', '.join(s['sources']) or '(none)'}")
+        print(f"documents: {s['documents']}  chunks: {s['chunks']}  fts: {s['fts']}  writer: {s['writer']}")
+    elif args.action == "search":
+        hits = ks.search(args.query)
+        if not hits:
+            print("no matches")
+        for h in hits:
+            print(f"  {h.uri}" + (f"#{h.heading_path}" if h.heading_path else ""))
+            print(f"    {h.snippet[:160]}")
+    elif args.action == "doctor":
+        for name, ok, detail in ks.doctor():
+            print(f"  [{'OK ' if ok else '-- '}] {name}: {detail}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="omnigent", description="Multi-harness agent orchestrator.")
     p.add_argument("--version", action="version", version=f"omnigent {__version__}")
@@ -97,6 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=8770)
     w.set_defaults(func=cmd_web)
+
+    k = sub.add_parser("knowledge", help="RAG index: status | sync | search <query> | doctor")
+    k.add_argument("action", choices=["status", "sync", "search", "doctor"])
+    k.add_argument("query", nargs="?", default="")
+    k.set_defaults(func=cmd_knowledge)
     return p
 
 

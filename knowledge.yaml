@@ -1,0 +1,23 @@
+# Omni knowledge (RAG) config — SEPARATE from harnesses.yaml (agents).
+# Disabled by default: Omni behaves exactly as before until you flip `enabled: true`
+# and point OMNI_OBSIDIAN_VAULT at your vault. Failure of this layer never fails a run.
+version: 1
+enabled: false
+
+sources:
+  main-vault:
+    type: obsidian
+    path_env: OMNI_OBSIDIAN_VAULT      # e.g. set OMNI_OBSIDIAN_VAULT=C:\Users\you\Documents\Vault
+    write_root: "_Omni"                # Omni only ever writes under <vault>/_Omni/**
+    include: ["**/*.md"]
+    exclude: [".obsidian/**", ".trash/**", "Templates/**"]
+
+  # repo docs are added per-project automatically from omni.db (README.md, docs/**)
+
+retrieval:
+  lexical: { enabled: true }           # SQLite FTS5, no embedding model needed
+  vector:  { enabled: false }          # Phase 7 — pluggable embeddings later
+
+defaults:
+  max_results: 8
+  max_context_chars: 12000

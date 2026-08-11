@@ -45,7 +45,9 @@ class ReviewResult:
 def review_prompt(task: dict, diff: str, commit_sha: str) -> str:
     """Narrow, read-only review contract (plan section 18)."""
     ac = "\n".join(f"- {c}" for c in (task.get("acceptance_criteria") or [])) or "- (none specified)"
-    return (
+    kb = task.get("_knowledge")
+    prefix = (kb + "\n\n---\n\n") if kb else ""
+    return prefix + (
         f"You are REVIEWING commit {commit_sha[:8]} for task: {task['title']}\n\n"
         "Do NOT modify code. Do NOT delegate. Review the diff below against the "
         "task's acceptance criteria for correctness, security, tests, regressions, "
@@ -60,10 +62,16 @@ def review_prompt(task: dict, diff: str, commit_sha: str) -> str:
 
 
 def contract_prompt(task: dict) -> str:
-    """Render a Task row into the plan's Task Contract (section 14)."""
+    """Render a Task row into the plan's Task Contract (section 14).
+
+    If the coordinator injected retrieved knowledge (task['_knowledge']), it is
+    prepended as background context — never as instructions.
+    """
+    kb = task.get("_knowledge")
+    prefix = (kb + "\n\n---\n\n") if kb else ""
     def block(label, items):
         return f"\n{label}\n" + "\n".join(f"- {i}" for i in items) if items else ""
-    return (
+    return prefix + (
         f"TASK: {task['title']}\n\n"
         f"GOAL\n{task.get('description','') or task['title']}\n"
         + block("OWNERSHIP (only modify these paths)", task.get("ownership") or [])

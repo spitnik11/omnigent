@@ -22,19 +22,20 @@ except ImportError:
     _HAVE_FLOW = False
 
 
-def _dispatch(task: str, harness: str | None, project: str | None, timeout: int):
+def _dispatch(task: str, harness: str | None, project: str | None, timeout: int,
+             profile: str | None = None):
     """Return (chosen, ok, output, seconds). Prefer the CrewAI Flow."""
     if _HAVE_FLOW:
-        st = run_flow(task, harness, project, timeout)
+        st = run_flow(task, harness, project, timeout, profile)
         return st.chosen, st.ok, st.output, st.seconds
-    name, r = orchestrate(task, harness, project, timeout)
+    name, r = orchestrate(task, harness, project, timeout, profile)
     return name, r.ok, r.output, r.seconds
 
 
-def cmd_list(_args) -> int:
+def cmd_list(args) -> int:
     engine = "CrewAI Flow" if _HAVE_FLOW else "direct core (crewai not installed)"
     print(f"omnigent {__version__}  |  engine: {engine}\n")
-    for name, h in list_harnesses().items():
+    for name, h in list_harnesses(args.profile).items():
         mark = "OK " if h.available else "-- "
         where = h.path or f"'{h.bin}' not on PATH"
         print(f"  [{mark}] {name:8} {where}")
@@ -42,7 +43,8 @@ def cmd_list(_args) -> int:
 
 
 def cmd_run(args) -> int:
-    chosen, ok, output, seconds = _dispatch(args.task, args.harness, args.project, args.timeout)
+    chosen, ok, output, seconds = _dispatch(args.task, args.harness, args.project, args.timeout,
+                                            args.profile)
     print(f"▶ {chosen}  ({seconds:.1f}s)  {'ok' if ok else 'FAILED'}\n")
     print(output or "(no output)")
     return 0 if ok else 1
@@ -61,14 +63,15 @@ def cmd_repl(args) -> int:
             continue
         if task in ("exit", "quit"):
             return 0
-        chosen, ok, output, seconds = _dispatch(task, args.harness, args.project, args.timeout)
+        chosen, ok, output, seconds = _dispatch(task, args.harness, args.project, args.timeout,
+                                                args.profile)
         print(f"▶ {chosen}  ({seconds:.1f}s)  {'ok' if ok else 'FAILED'}")
         print(output or "(no output)", "\n")
 
 
 def cmd_web(args) -> int:
     from .web import serve
-    serve(args.host, args.port)
+    serve(args.host, args.port, args.profile)
     return 0
 
 
@@ -103,25 +106,29 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"omnigent {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("list", help="show harnesses and availability").set_defaults(func=cmd_list)
+    lp = sub.add_parser("list", help="show harnesses and availability")
+    lp.add_argument("--profile", help="harnesses.yaml profile to filter by (default: all)")
+    lp.set_defaults(func=cmd_list)
 
-    common = dict()
     r = sub.add_parser("run", help="route and run one task")
     r.add_argument("task", help="the task (prefix '@name ' to force a harness)")
     r.add_argument("--harness", help="force a specific harness")
     r.add_argument("--project", help="project directory to run in (default: cwd)")
     r.add_argument("--timeout", type=int, default=1800, help="seconds (default 1800)")
+    r.add_argument("--profile", help="harnesses.yaml profile to filter by (default: all)")
     r.set_defaults(func=cmd_run)
 
     rp = sub.add_parser("repl", help="interactive loop")
     rp.add_argument("--harness", help="force a specific harness for every line")
     rp.add_argument("--project", help="project directory to run in (default: cwd)")
     rp.add_argument("--timeout", type=int, default=1800, help="seconds (default 1800)")
+    rp.add_argument("--profile", help="harnesses.yaml profile to filter by (default: all)")
     rp.set_defaults(func=cmd_repl)
 
     w = sub.add_parser("web", help="launch the local web UI")
     w.add_argument("--host", default="127.0.0.1")
     w.add_argument("--port", type=int, default=8770)
+    w.add_argument("--profile", help="harnesses.yaml profile to filter by (default: all)")
     w.set_defaults(func=cmd_web)
 
     k = sub.add_parser("knowledge", help="RAG index: status | sync | search <query> | doctor")

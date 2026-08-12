@@ -9,18 +9,18 @@ from .harness import Harness, Result, load_config, load_harnesses, run
 from .router import route, strip_prefix
 
 
-def _load() -> tuple[dict, dict[str, Harness]]:
+def _load(profile: str | None = None) -> tuple[dict, dict[str, Harness]]:
     cfg = load_config()
-    return cfg, load_harnesses(cfg)
+    return cfg, load_harnesses(cfg, profile=profile)
 
 
 def orchestrate(task: str, harness: str | None = None, project: str | None = None,
-                timeout: int = 1800) -> tuple[str, Result]:
-    cfg, hs = _load()
+                timeout: int = 1800, profile: str | None = None) -> tuple[str, Result]:
+    cfg, hs = _load(profile)
     name = route(task, hs, cfg, forced=harness)
     prompt = strip_prefix(task, hs)
     return name, run(hs[name], prompt, project, timeout)
 
 
-def list_harnesses() -> dict[str, Harness]:
-    return _load()[1]
+def list_harnesses(profile: str | None = None) -> dict[str, Harness]:
+    return _load(profile)[1]

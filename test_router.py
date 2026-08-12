@@ -15,8 +15,8 @@ CFG = {
 
 class _AvailHarness(Harness):
     """Harness with availability forced, so tests don't depend on PATH."""
-    def __init__(self, name: str, ok: bool):
-        super().__init__(name=name, bin=name, detect=name)
+    def __init__(self, name: str, ok: bool, **kw):
+        super().__init__(name=name, bin=name, detect=name, **kw)
         self._ok = ok
 
     @property
@@ -61,6 +61,26 @@ def main():
         raise AssertionError("expected error when nothing available")
     except RuntimeError:
         pass
+
+    # cost-aware routing: role=None (unspecified) behaves exactly as before —
+    # keyword rules still decide, no local preference applied.
+    assert route("write me a poem", all_up, CFG, role=None) == "claude"
+
+    # IMPLEMENT prefers an available cost:0 local harness whose capabilities match
+    with_local = _hs({"claude": True, "codex": True})
+    with_local["aider"] = _AvailHarness("aider", True, kind="local", cost=0,
+                                        capabilities=["implement"])
+    assert route("write me a poem", with_local, CFG, role="IMPLEMENT") == "aider"
+    # REVIEW is untouched by the local preference -> falls through to keyword rules/default
+    assert route("write me a poem", with_local, CFG, role="REVIEW") == "claude"
+    # local harness down -> falls back to keyword rules/default, no error
+    with_local["aider"]._ok = False
+    assert route("write me a poem", with_local, CFG, role="IMPLEMENT") == "claude"
+    # a local harness whose capabilities don't include "implement" is skipped
+    caps_mismatch = _hs({"claude": True})
+    caps_mismatch["aider"] = _AvailHarness("aider", True, kind="local", cost=0,
+                                           capabilities=["docs"])
+    assert route("write me a poem", caps_mismatch, CFG, role="IMPLEMENT") == "claude"
 
     print("router self-check ok")
 

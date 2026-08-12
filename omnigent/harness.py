@@ -25,6 +25,9 @@ class Harness:
     args: list[str] = field(default_factory=list)
     detect: str = ""
     enabled: bool = True
+    kind: str = "api"                      # "api" or "local" — default preserves today's harnesses
+    cost: int = 1                          # 0 = free/local, 1 = paid API
+    capabilities: list[str] = field(default_factory=list)
 
     @property
     def path(self) -> str | None:
@@ -48,7 +51,12 @@ def load_config(path: Path | str = CONFIG) -> dict:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
 
 
-def load_harnesses(cfg: dict | None = None) -> dict[str, Harness]:
+def load_harnesses(cfg: dict | None = None, profile: str | None = None) -> dict[str, Harness]:
+    """Load harnesses from config, optionally filtered by a `profiles` entry.
+
+    profile=None (default) returns every harness — identical to today's behavior.
+    An unknown profile name also returns every harness (fail open, never crash).
+    """
     cfg = cfg if cfg is not None else load_config()
     out: dict[str, Harness] = {}
     for name, h in (cfg.get("harnesses") or {}).items():
@@ -59,7 +67,14 @@ def load_harnesses(cfg: dict | None = None) -> dict[str, Harness]:
             args=list(h.get("args", [])),
             detect=h.get("detect", h.get("bin", name)),
             enabled=h.get("enabled", True),
+            kind=h.get("kind", "api"),
+            cost=h.get("cost", 1),
+            capabilities=list(h.get("capabilities", [])),
         )
+    if profile:
+        names = (cfg.get("profiles") or {}).get(profile)
+        if names:
+            out = {n: h for n, h in out.items() if n in names}
     return out
 
 

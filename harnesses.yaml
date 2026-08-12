@@ -27,6 +27,36 @@ harnesses:
     # For guardrails instead, use: ["exec", "-s", "workspace-write", "{prompt}"].
     args: ["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "{prompt}"]
 
+  aider:
+    bin: aider
+    detect: aider
+    kind: local
+    cost: 0
+    capabilities: [implement, refactor, tests]
+    # Aider runs one message headlessly and auto-commits.
+    args: ["--model", "ollama/qwen2.5-coder:7b", "--yes", "--no-stream", "--message", "{prompt}"]
+
+  opencode:
+    bin: opencode
+    detect: opencode
+    kind: local
+    cost: 0
+    capabilities: [implement, refactor, tests]
+    args: ["run", "{prompt}"]        # model set via opencode config -> ollama
+
+  goose:
+    bin: goose
+    detect: goose
+    kind: local
+    cost: 0
+    capabilities: [implement, refactor, tests]
+    args: ["run", "-t", "{prompt}"]  # provider ollama set via goose config
+
+profiles:                # No profile selected -> all harnesses (today's behavior).
+  default: [claude, codex, grok, aider, opencode, goose]
+  api:     [claude, codex, grok]
+  local:   [aider, opencode, goose]
+
 router:
   # Used when no explicit harness is given (--harness X or a leading "@name ").
   default: claude

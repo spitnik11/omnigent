@@ -18,6 +18,9 @@ from .core import list_harnesses
 from .workflow.webapi import routes as workflow_routes
 
 
+_profile: str | None = None  # set by serve(); None = today's behavior (all harnesses)
+
+
 async def index(_r):
     return HTMLResponse(PAGE)
 
@@ -25,7 +28,7 @@ async def index(_r):
 async def harnesses(_r):
     return JSONResponse({
         "version": __version__,
-        "harnesses": {n: {"available": h.available} for n, h in list_harnesses().items()},
+        "harnesses": {n: {"available": h.available} for n, h in list_harnesses(_profile).items()},
     })
 
 
@@ -36,9 +39,11 @@ app = Starlette(routes=[
 ])
 
 
-def serve(host: str = "127.0.0.1", port: int = 8770):
+def serve(host: str = "127.0.0.1", port: int = 8770, profile: str | None = None):
     import uvicorn
-    print(f"Omni console -> http://{host}:{port}")
+    global _profile
+    _profile = profile
+    print(f"Omni console -> http://{host}:{port}" + (f"  (profile: {profile})" if profile else ""))
     uvicorn.run(app, host=host, port=port, log_level="warning")
 
 

@@ -30,6 +30,7 @@ class OmniState(BaseModel):
     harness: str = ""   # forced harness (optional)
     project: str = ""
     timeout: int = 1800
+    profile: str = ""   # optional harnesses.yaml profile filter
     chosen: str = ""
     output: str = ""
     ok: bool = False
@@ -41,7 +42,7 @@ class OmnigentFlow(Flow[OmniState]):
     @start()
     def classify(self):
         self._cfg = load_config()
-        self._hs = load_harnesses(self._cfg)
+        self._hs = load_harnesses(self._cfg, profile=self.state.profile or None)
         self.state.chosen = route(
             self.state.task, self._hs, self._cfg,
             forced=self.state.harness or None,
@@ -59,12 +60,13 @@ class OmnigentFlow(Flow[OmniState]):
 
 
 def run_flow(task: str, harness: str | None = None, project: str | None = None,
-             timeout: int = 1800) -> OmniState:
+             timeout: int = 1800, profile: str | None = None) -> OmniState:
     flow = OmnigentFlow()
     flow.kickoff(inputs={
         "task": task,
         "harness": harness or "",
         "project": project or "",
         "timeout": timeout,
+        "profile": profile or "",
     })
     return flow.state

@@ -27,6 +27,13 @@ def main():
     assert [r["seq"] for r in tail] == list(range(19_996, 20_001))
     page = runner.transcripts.page("run_stress", before=10, limit=3)
     assert [r["seq"] for r in page["items"]] == [7, 8, 9]
+    restarted = object.__new__(Runner)
+    restarted.feeds = defaultdict(lambda: deque(maxlen=FEED_LIMIT))
+    restarted.sequences = defaultdict(int)
+    restarted.feed_lock = threading.Lock()
+    restarted.transcripts = runner.transcripts
+    restored = restarted.replay("run_stress")
+    assert len(restored) == REPLAY_LIMIT + 1 and restarted.sequences["run_stress"] == 20_000
     assert normalize({"type": "output", "line": "\x1b[33m\x1b[0m"}) is None
     tool = normalize({"type": "output", "agent": "grok", "line": "→ Read file.py"})
     assert tool["kind"] == "tool" and "\x1b" not in tool["line"]

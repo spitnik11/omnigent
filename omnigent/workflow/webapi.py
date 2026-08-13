@@ -123,6 +123,13 @@ class Runner:
     def replay(self, run_id: str, after: int | None = None) -> list[dict]:
         with self.feed_lock:
             retained = list(self.feeds.get(run_id, ()))
+        if not retained:
+            persisted = self.transcripts.page(run_id, limit=FEED_LIMIT)["items"]
+            if persisted:
+                with self.feed_lock:
+                    self.feeds[run_id].extend(persisted)
+                    self.sequences[run_id] = max(r["seq"] for r in persisted)
+                    retained = list(self.feeds[run_id])
         if after is not None:
             return [r for r in retained if r["seq"] > after]
         omitted = max(0, self.sequences.get(run_id, 0) - min(len(retained), REPLAY_LIMIT))

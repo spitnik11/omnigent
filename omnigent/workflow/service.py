@@ -361,6 +361,13 @@ class WorkflowService:
             self.store.update("tasks", task["id"], status=TaskStatus.APPROVED)
             self.store.event(task["run_id"], "TASK_APPROVED", task["id"], None, {"commit": commit})
             return TaskStatus.APPROVED
+        expected = len([a for a in AGENTS if a != asg["agent"]])
+        if len(reviews) >= expected:
+            self.store.update("tasks", task["id"], status=TaskStatus.WAITING_FOR_REVIEW)
+            self.store.update("runs", task["run_id"], status=RunStatus.WAITING_FOR_USER)
+            self.store.event(task["run_id"], "REVIEW_CAPACITY_REQUIRED", task["id"], None,
+                             {"approvals": len(approvals), "required": MIN_APPROVALS})
+            return TaskStatus.WAITING_FOR_REVIEW
         return task["status"]   # only abstains / not enough approvals -> waits (never a false fail)
 
     def revise_task(self, task: dict, on_line=None) -> str:

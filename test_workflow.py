@@ -200,6 +200,22 @@ def test_structured_usage():
     print("usage-parser ok: structured events normalized")
 
 
+def test_insufficient_review_capacity_is_visible():
+    tmp, repo, base = _mkrepo()
+    class CapacityMock(MockAgentAdapter):
+        def review(self, task, diff, commit_sha, on_line=None, cwd=None):
+            return ReviewResult("ABSTAIN" if self.name == "claude" else "APPROVED")
+    store = Store(tmp / "omni.db")
+    svc = WorkflowService(store=store, adapter_factory=lambda a: CapacityMock(a))
+    proj = svc.create_project("proj", str(repo), default_branch=base)
+    run = svc.create_run(proj["id"], "Wait for reviewer", mode="cloud")
+    task = svc.create_task(run["id"], "Feature", agent="grok")
+    svc.drive(run["id"])
+    assert store.get("tasks", task["id"])["status"] == TaskStatus.WAITING_FOR_REVIEW
+    assert store.get("runs", run["id"])["status"] == RunStatus.WAITING_FOR_USER
+    print("review-capacity ok: insufficient approvals surfaced")
+
+
 if __name__ == "__main__":
     test_full_loop()
     test_revision_loop()
@@ -209,4 +225,5 @@ if __name__ == "__main__":
     test_review_output_parsing()
     test_cancel_run()
     test_structured_usage()
+    test_insufficient_review_capacity_is_visible()
     print("workflow self-check ok")

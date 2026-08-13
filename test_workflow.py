@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from omnigent.workflow.adapter import MockAgentAdapter, ReviewResult
+from omnigent.workflow.adapter import MockAgentAdapter, ReviewResult, _capacity_limited
 from omnigent.workflow.models import RunStatus, Store, TaskStatus
 from omnigent.workflow.service import WorkflowService
 
@@ -96,7 +96,37 @@ def test_revision_loop():
           f"{len(approvals_now)} approvals on final commit")
 
 
+def test_limited_reviewer_is_skipped():
+    assert _capacity_limited("You've hit your session limit · resets later")
+    assert not _capacity_limited("VERDICT: APPROVED")
+    tmp, repo, base = _mkrepo()
+
+    class LimitedMock(MockAgentAdapter):
+        def review(self, task, diff, commit_sha, on_line=None, cwd=None):
+            if self.name == "claude":
+                raise RuntimeError("You've hit your session limit")
+            return ReviewResult("APPROVED", summary="ok")
+
+    store = Store(tmp / "omni.db")
+    svc = WorkflowService(store=store, adapter_factory=lambda a: LimitedMock(a))
+    proj = svc.create_project("proj", str(repo), default_branch=base)
+    run = svc.create_run(proj["id"], "Review despite one limited cloud agent")
+    task = svc.create_task(run["id"], "Feature", agent="aider")
+
+    svc.drive(run["id"])
+
+    reviews = store.query("reviews", "task_id=?", (task["id"],))
+    assert {r["reviewer_agent"]: r["verdict"] for r in reviews} == {
+        "claude": "ABSTAIN", "codex": "APPROVED", "grok": "APPROVED"}
+    assert store.get("tasks", task["id"])["status"] == TaskStatus.APPROVED
+    skipped = store.query("run_events", "run_id=? AND event_type=?",
+                          (run["id"], "REVIEW_SKIPPED"))
+    assert len(skipped) == 1 and skipped[0]["agent"] == "claude"
+    print("limited-reviewer ok: claude skipped, codex + grok approved")
+
+
 if __name__ == "__main__":
     test_full_loop()
     test_revision_loop()
+    test_limited_reviewer_is_skipped()
     print("workflow self-check ok")

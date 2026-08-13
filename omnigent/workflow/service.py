@@ -12,7 +12,7 @@ import re
 import subprocess
 import threading
 
-from .adapter import get_adapter
+from .adapter import ReviewResult, get_adapter
 from ..harness import load_config, load_harnesses
 from .models import (AssignmentStatus, Role, RunStatus, Store, TaskStatus,
                      Verdict, new_id, now)
@@ -252,13 +252,22 @@ class WorkflowService:
             cb = (lambda line, a=r: on_line(a, task["id"], line)) if on_line else None
             # review INSIDE the implementer's worktree (checked out at the commit) so the
             # reviewer can read the actual files, not just the diff text.
-            rr = self._adapter(r).review(rtask, diff, commit, on_line=cb, cwd=asg["worktree_path"])
+            try:
+                rr = self._adapter(r).review(
+                    rtask, diff, commit, on_line=cb, cwd=asg["worktree_path"])
+                if rr is None:
+                    raise RuntimeError("reviewer returned no result")
+            except Exception as exc:  # one unavailable reviewer must not stop the others
+                rr = ReviewResult(Verdict.ABSTAIN,
+                                  summary=f"reviewer failed: {type(exc).__name__}")
             self.store.insert("reviews", {
                 "id": new_id("rev"), "task_id": task["id"], "assignment_id": asg["id"],
                 "reviewer_agent": r, "reviewed_commit_sha": commit, "verdict": rr.verdict,
                 "summary": rr.summary, "findings": rr.findings, "created_at": now()})
-            self.store.event(run["id"], "REVIEW_COMPLETED", task["id"], r,
-                             {"verdict": rr.verdict, "commit": commit})
+            event = "REVIEW_SKIPPED" if rr.verdict == Verdict.ABSTAIN else "REVIEW_COMPLETED"
+            self.store.event(run["id"], event, task["id"], r,
+                             {"verdict": rr.verdict, "commit": commit,
+                              **({"reason": rr.summary} if event == "REVIEW_SKIPPED" else {})})
         return self.evaluate_task(task)
 
     def evaluate_task(self, task: dict) -> str:

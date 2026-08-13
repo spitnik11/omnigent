@@ -118,9 +118,12 @@ class CliAgentAdapter(AgentAdapter):
     def review(self, task, diff, commit_sha, on_line=None, cwd=None):
         h = self._harness()
         if not h:
-            return ReviewResult("BLOCKED", summary=f"agent '{self.name}' unavailable")
+            return ReviewResult("ABSTAIN", summary=f"agent '{self.name}' unavailable")
         # reviewers inspect the diff text (read-only intent); cwd = repo root.
         res = run_harness(h, review_prompt(task, diff, commit_sha), cwd, on_line=on_line)
+        if _capacity_limited(res.output):
+            return ReviewResult("ABSTAIN", summary=(res.output.splitlines()[0])[:200],
+                                output=res.output)
         verdict, findings = _parse_verdict(res.output)
         ti, to, cost = _parse_usage(res.output)
         return ReviewResult(verdict, summary=(res.output.splitlines()[0] if res.output else "")[:200],
@@ -201,6 +204,14 @@ def _parse_usage(output: str) -> tuple[int, int, float]:
 def _findings(text: str) -> list:
     return [l.strip("-* \t") for l in text.splitlines()
             if l.strip().startswith(("-", "*")) and len(l.strip("-* \t")) > 3][:8]
+
+
+def _capacity_limited(output: str) -> bool:
+    text = (output or "").lower()
+    return any(marker in text for marker in (
+        "hit your session limit", "usage limit", "rate limit", "quota exceeded",
+        "too many requests", "resource exhausted",
+    ))
 
 
 def _parse_verdict(output: str) -> tuple[str, list]:

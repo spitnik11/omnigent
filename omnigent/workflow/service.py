@@ -18,7 +18,8 @@ from .models import (AssignmentStatus, Role, RunStatus, Store, TaskStatus,
                      Verdict, new_id, now)
 from .worktrees import WorktreeManager
 
-AGENTS = ["claude", "codex", "grok"]   # cloud API agents — the reviewers (plan section 34)
+AGENTS = ["claude", "codex", "grok"]   # cloud API agents — the reviewer pool (plan section 34)
+CLOUD_IMPL = ["codex", "grok"]         # cloud-mode implementers (codex primary); claude reserved as reviewer
 MIN_APPROVALS = 2                      # plan section 20 (2 of 3)
 # Local implementers to auto-offload IMPLEMENT work to (aider first — fastest; opencode/
 # goose reliable on qwen3:14b). Enables a parallel local swarm; cloud agents still review.
@@ -118,7 +119,9 @@ class WorkflowService:
             return list(AGENTS)
         cloud = [a for a in AGENTS if a in hs and hs[a].available]
         if mode == "cloud":
-            return cloud or list(AGENTS)
+            # codex implements (grok as second for parallel tasks); claude stays a reviewer.
+            cimpl = [a for a in CLOUD_IMPL if a in hs and hs[a].available]
+            return cimpl or cloud or list(AGENTS)
         local = [n for n in LOCAL_IMPL if n in hs and hs[n].available]     # offload targets
         return (local + [a for a in cloud if a not in local]) or list(AGENTS)
 

@@ -7,9 +7,10 @@ reaches `main` until a human approves. A Claude-CLI-style web console streams
 every line of work live.
 
 > Status at a glance: the coordinator, worktree isolation, cross-agent review,
-> revision loop, integration, human gate, and the streaming console are **built
-> and tested end-to-end with mock agents**. The real-CLI execution path is wired
-> but **not yet validated live at scale**. See [Status](#status--build-order).
+> revision loop, integration, human gate, streaming console, **auto-planning**, and
+> **Local/Cloud modes** are built and tested. The real-CLI path is now **validated
+> live** — a Cloud Omni run added the Cydonia SillyTavern artifacts to a real repo
+> hands-off (3 tasks → cross-review → integrate → human gate → merge). See [Status](#status--build-order).
 
 ---
 
@@ -202,11 +203,13 @@ GET  /harnesses                 agent availability
 
 ```
 IMPLEMENTER     REVIEWERS (read-only)
-claude          codex + grok
-codex           claude + grok
+codex           claude + grok      ← cloud default (CLOUD_IMPL: codex primary, grok second)
 grok            claude + codex
+claude          codex + grok       (claude is reserved as a reviewer in cloud mode)
 ```
 
+In **cloud mode** codex is the primary implementer and claude stays a reviewer
+(`CLOUD_IMPL = ["codex", "grok"]`); reviewers are always `AGENTS` minus the implementer.
 Two independent external reviews per task; **2-of-3 approval** required. Because a
 review is pinned to a `reviewed_commit_sha`, revising the code makes prior
 approvals stale by construction — no manual invalidation. This is what keeps
@@ -243,7 +246,8 @@ cross-agent review deterministic instead of a debate.
 | 16 | Human approval gate | ✅ built + tested |
 | 17 | RunEvent stream (SSE) | ✅ built + tested |
 | 18 | Minimal console UI (CLI-style) | ✅ built + design-reviewed |
-| 19 | **Automatic planning** (goal → task DAG) | ⬜ deferred — today a goal = 1 task |
+| 19 | **Automatic planning** (goal → task DAG) | ✅ built (`planner.py`; cloud lead splits goal, single-task fallback) |
+| 19b | **Local/Cloud modes** (local agents implement, cloud reviews) | ✅ built (`runs.mode`, `CLOUD_IMPL`/`LOCAL_IMPL`) |
 | 20 | Workflow graph UI (React Flow) | ⬜ deferred until live state justifies it |
 
 **Tests:** `test_workflow.py` (full loop: 3 tasks → 6 reviews → integration →

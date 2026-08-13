@@ -42,7 +42,7 @@ harnesses:
     kind: local
     cost: 0
     capabilities: [implement, refactor, tests]
-    args: ["run", "-m", "ollama/llama3.1:8b", "{prompt}"]  # native tool-calling model
+    args: ["run", "-m", "ollama/qwen3:14b", "{prompt}"]  # native tool-calling model
 
   goose:
     bin: goose

@@ -20,9 +20,9 @@ from .worktrees import WorktreeManager
 
 AGENTS = ["claude", "codex", "grok"]   # cloud API agents — the reviewers (plan section 34)
 MIN_APPROVALS = 2                      # plan section 20 (2 of 3)
-# Reliable local implementers to auto-offload IMPLEMENT work to (opendcode/goose stay
-# connected but opt-in via @name until reliable with a local model).
-LOCAL_IMPL = ["aider"]
+# Local implementers to auto-offload IMPLEMENT work to (aider first — fastest; opencode/
+# goose reliable on qwen3:14b). Enables a parallel local swarm; cloud agents still review.
+LOCAL_IMPL = ["aider", "opencode", "goose"]
 
 
 def _slug(s: str) -> str:

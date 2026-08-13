@@ -22,7 +22,7 @@ if (Test-Engine -and -not (docker ps --format '{{.Names}}' | Select-String 'olla
 }
 # 3. env for the local agents (inherited by the console + the CLIs it spawns)
 $env:GOOSE_PROVIDER = 'ollama'
-$env:GOOSE_MODEL    = 'llama3.1:8b'
+$env:GOOSE_MODEL    = 'qwen3:14b'
 $env:PATH = "$env:PATH;C:\Users\losth\.local\bin;C:\Users\losth\AppData\Roaming\npm;C:\Users\losth\AppData\Roaming\Python\Python310\Scripts"
 
 # 4. start the local-profile console if not already up

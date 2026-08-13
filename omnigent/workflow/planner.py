@@ -36,9 +36,11 @@ def _prompt(goal: str, ctx: str) -> str:
         f"PROJECT top-level: {ctx or '(empty repo)'}\n\n"
         "Return ONLY a JSON array (no prose, no code fences) of task objects:\n"
         '[{"title": "...", "description": "what to build, and which files/paths it owns", '
+        '"ownership": ["repo/relative/path"], "do_not_modify": ["repo/relative/path"], '
         '"acceptance": ["checkable criterion", "..."], "depends_on": []}]\n'
         "depends_on holds 0-based indices of EARLIER tasks in this array that must finish "
-        "first ([] = independent). Keep it to 2–5 focused tasks."
+        "first ([] = independent). Parallel tasks MUST have disjoint ownership. If two tasks "
+        "must touch the same path, make the later task depend on the earlier one. Keep it to 2–5 focused tasks."
     )
 
 
@@ -54,17 +56,35 @@ def _parse(output: str) -> list[dict]:
     except Exception:
         return []
     tasks = []
+    owners: list[set[str]] = []
     for i, t in enumerate(data):
         if not isinstance(t, dict) or not t.get("title"):
             continue
         deps = [d for d in (t.get("depends_on") or []) if isinstance(d, int) and 0 <= d < i]
+        ownership = _paths(t.get("ownership"))
+        blocked = _paths(t.get("do_not_modify"))
+        current = set(ownership)
+        for j, prior in enumerate(owners):
+            if current & prior and j not in deps:
+                deps.append(j)
         tasks.append({"title": str(t["title"])[:120],
                       "description": str(t.get("description", "")),
                       "acceptance": [str(x) for x in (t.get("acceptance") or [])][:6],
-                      "depends_on": deps})
+                      "ownership": ownership, "do_not_modify": blocked,
+                      "depends_on": sorted(deps)})
+        owners.append(current)
         if len(tasks) >= MAX_TASKS:
             break
     return tasks
+
+
+def _paths(value) -> list[str]:
+    out = []
+    for raw in value if isinstance(value, list) else []:
+        path = str(raw).strip().replace("\\", "/").strip("/")
+        if path and ".." not in Path(path).parts and ":" not in Path(path).parts[0]:
+            out.append(path)
+    return out
 
 
 def plan_goal(goal: str, repo_path: str, mock: bool = False, on_line=None) -> list[dict]:
@@ -72,7 +92,7 @@ def plan_goal(goal: str, repo_path: str, mock: bool = False, on_line=None) -> li
     Never raises; falls back to a single task = the goal."""
     if mock:  # deterministic split so demo/tests show the swarm
         return [{"title": f"{goal} — part {n}", "description": "", "acceptance": [],
-                 "depends_on": ([] if n == 1 else [])} for n in (1, 2, 3)]
+                 "ownership": [], "do_not_modify": [], "depends_on": []} for n in (1, 2, 3)]
     try:
         h = load_harnesses(load_config()).get(PLAN_LEAD)
         if not h or not h.available:

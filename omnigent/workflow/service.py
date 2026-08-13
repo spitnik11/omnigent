@@ -11,8 +11,11 @@ from __future__ import annotations
 import re
 import subprocess
 import threading
+import json
+import time
+import urllib.request
 
-from .adapter import ReviewResult, get_adapter
+from .adapter import ReviewResult, get_adapter, parse_usage_event
 from ..harness import load_config, load_harnesses
 from .models import (AssignmentStatus, Role, RunStatus, Store, TaskStatus,
                      Verdict, new_id, now)
@@ -37,6 +40,7 @@ class WorkflowService:
         self.mock = mock
         self.logs: dict[str, list[str]] = {}   # assignment_id -> live output lines
         self.processes: dict[str, object] = {}  # assignment_id -> owned subprocess
+        self._health_cache: dict[str, tuple[float, bool]] = {}
         # injectable so tests can script agent behaviour (revision loop, etc.)
         self._adapter = adapter_factory or (lambda agent: get_adapter(agent, mock=self.mock))
         # Optional RAG. None = today's exact behaviour. Never allowed to fail a run.
@@ -123,8 +127,24 @@ class WorkflowService:
             # codex implements (grok as second for parallel tasks); claude stays a reviewer.
             cimpl = [a for a in CLOUD_IMPL if a in hs and hs[a].available]
             return cimpl or cloud or list(AGENTS)
-        local = [n for n in LOCAL_IMPL if n in hs and hs[n].available]     # offload targets
-        return (local + [a for a in cloud if a not in local]) or list(AGENTS)
+        local = [n for n in LOCAL_IMPL if n in hs and hs[n].available
+                 and (self.mock or self._local_healthy(hs[n]))]
+        return local
+
+    def _local_healthy(self, harness) -> bool:
+        cached = self._health_cache.get(harness.name)
+        if cached and time.monotonic() - cached[0] < 30:
+            return cached[1]
+        model = next((a.split("ollama/", 1)[1] for a in harness.args if "ollama/" in a), None)
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=2) as response:
+                names = {m["name"].split(":latest")[0]
+                         for m in json.load(response).get("models", [])}
+            ok = not model or model in names or model.split(":")[0] in names
+        except Exception:
+            ok = False
+        self._health_cache[harness.name] = (time.monotonic(), ok)
+        return ok
 
     def _pick_agent(self, task: dict, busy: set[str]) -> str | None:
         if task.get("assigned_agent"):
@@ -166,6 +186,12 @@ class WorkflowService:
 
         def sink(line):
             self.logs.setdefault(aid, []).append(line)
+            usage = parse_usage_event(line)
+            if usage:
+                self.store.update("assignments", aid, tokens_in=usage[0], tokens_out=usage[1],
+                                  cost_usd=usage[2])
+                self.store.event(run["id"], "USAGE_UPDATED", task["id"], agent,
+                                 {"tokens_in": usage[0], "tokens_out": usage[1], "cost_usd": usage[2]})
             if on_line:
                 on_line(agent, task["id"], line)
 
@@ -236,11 +262,18 @@ class WorkflowService:
         self.store.update("runs", run_id, status=RunStatus.RUNNING)
         busy: set[str] = set()
         assignments: list[dict] = []
-        for t in self.ready_tasks(run_id):               # serial assignment
+        ready = self.ready_tasks(run_id)
+        for t in ready:               # serial assignment
             a = self._pick_agent(t, busy)
             if a:
                 busy.add(a)
                 assignments.append(self.assign(t, a))
+        if ready and not assignments:
+            for task in ready:
+                self.store.update("tasks", task["id"], status=TaskStatus.FAILED)
+                self.store.event(run_id, "LOCAL_PREFLIGHT_FAILED", task["id"], None,
+                                 {"reason": "no healthy local implementer"})
+            return []
         results: list[dict] = []
         lock = threading.Lock()
         def work(asg):

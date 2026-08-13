@@ -1,6 +1,7 @@
 """Workflow web API input self-check. Run: python test_webapi.py"""
 from omnigent.workflow.adapter import contract_prompt
 from omnigent.workflow.webapi import _safe_paths, _validate_tasks
+from omnigent.workflow.planner import _parse
 
 
 def main():
@@ -24,6 +25,9 @@ def main():
         raise AssertionError("future dependency accepted")
     except ValueError:
         pass
+    planned = _parse('[{"title":"a","ownership":["same.py"]},'
+                     '{"title":"b","ownership":["same.py"],"depends_on":[]}]')
+    assert planned[1]["depends_on"] == [0], planned
     print("webapi input self-check ok")
 
 

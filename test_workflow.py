@@ -10,6 +10,7 @@ from pathlib import Path
 
 from omnigent.workflow.adapter import (AgentResult, MockAgentAdapter, ReviewResult,
                                        _capacity_limited, _parse_verdict, _review_summary)
+from omnigent.workflow.adapter import parse_usage_event
 from omnigent.workflow.models import RunStatus, Store, TaskStatus
 from omnigent.workflow.service import WorkflowService
 
@@ -192,6 +193,13 @@ def test_cancel_run():
     print("cancel ok: run and task cancelled")
 
 
+def test_structured_usage():
+    assert parse_usage_event('{"usage":{"input_tokens":12,"output_tokens":4},"cost_usd":0.1}') == (12, 4, 0.1)
+    assert parse_usage_event('{"prompt_tokens":5,"completion_tokens":2,"cost":0.01}') == (5, 2, 0.01)
+    assert parse_usage_event("plain output") is None
+    print("usage-parser ok: structured events normalized")
+
+
 if __name__ == "__main__":
     test_full_loop()
     test_revision_loop()
@@ -200,4 +208,5 @@ if __name__ == "__main__":
     test_failed_dependency_finishes()
     test_review_output_parsing()
     test_cancel_run()
+    test_structured_usage()
     print("workflow self-check ok")

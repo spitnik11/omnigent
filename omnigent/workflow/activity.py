@@ -43,7 +43,9 @@ def normalize(item: dict) -> dict | None:
         "INTEGRATION_CONFLICT": "error", "RUN_READY": "human_gate",
         "RUN_FAILED": "error",
     }.get(event, "run")
-    state = "failed" if kind == "error" else "completed" if event.endswith(("COMPLETED", "CREATED")) else "active"
+    completed = event.endswith(("COMPLETED", "CREATED")) or event in {
+        "TASK_APPROVED", "TASK_INTEGRATED", "PLAN_COMPLETED", "RUN_READY", "RUN_APPROVED"}
+    state = "failed" if kind == "error" else "completed" if completed else "active"
     if event == "REVIEW_SKIPPED":
         state = "skipped"
     summary = event.replace("_", " ").lower()

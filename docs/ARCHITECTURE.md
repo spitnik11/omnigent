@@ -278,3 +278,16 @@ python test_workflow.py     # prove the coordinator with mock agents
 In the console: type a goal, keep **demo** checked for an instant free run, and
 watch the agents plan → build → review → integrate, streaming CLI-style. Uncheck
 demo and give a real git repo path to drive your actual CLIs.
+
+## 9. Console activity pipeline
+
+Raw harness lines are sanitized and normalized into semantic activity records before
+they reach the browser. The in-memory SSE feed is capped at 5,000 records and initial
+replay at 800; full audit output is appended to paged JSONL transcripts under
+`~/.omni/transcripts`. The browser renders task/activity compartments in animation-frame
+batches, deduplicates by sequence, caps detail nodes, and loads older history only on demand.
+
+Task creation preserves ownership, forbidden paths, validation, priority, and dependencies.
+The coordinator rejects no-op, dirty, and out-of-scope implementations before cloud review.
+Capacity-limited reviewers abstain without stopping remaining reviewers, and fatal driver
+errors now finish the run explicitly instead of leaving a false active state.

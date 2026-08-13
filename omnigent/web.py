@@ -298,6 +298,7 @@ async function refreshSnapshot(){
       <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.title)}</span>
       <span class="agent" style="color:var(--${a}, var(--muted))">${esc(a)}</span></div>`;
   }).join(''):'<div class="task-row">no tasks</div>';
+  s.tasks.forEach(t=>{const g=S.groups.get(t.id);if(g){g.label.textContent=t.title;g.state.textContent=t.status.replace(/_/g,' ').toLowerCase();}});
   $('#approve-btn').classList.toggle('hidden', s.run.status!=='WAITING_FOR_USER');
   $('#stop-btn').classList.toggle('hidden', !['PLANNING','RUNNING','REVIEWING','INTEGRATING'].includes(s.run.status));
 }

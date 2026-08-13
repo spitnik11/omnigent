@@ -12,11 +12,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      # Fast: the core (router + harness detection) needs only pyyaml, not the
-      # full crewai stack. Keeps CI under ~20s.
-      - run: pip install pyyaml
+      - run: pip install pyyaml starlette sse-starlette
       - run: python test_router.py
-      - run: python -m omnigent.harness
+      - run: python test_harness.py
+      - run: python test_workflow.py
+      - run: python test_knowledge.py
+      - run: python test_webapi.py
+      - run: python test_activity.py
+      - run: python -m compileall -q omnigent
 
   secrets:
     runs-on: ubuntu-latest

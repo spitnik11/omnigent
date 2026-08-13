@@ -12,6 +12,7 @@ construction.
 from __future__ import annotations
 
 import subprocess
+import json
 from dataclasses import dataclass, field
 
 from ..harness import load_config, load_harnesses
@@ -199,6 +200,22 @@ def _parse_usage(output: str) -> tuple[int, int, float]:
         or _re.search(r'\$([0-9]+\.[0-9]+)', output)
     cost = float(cm.group(1)) if cm else 0.0
     return ti, to, cost
+
+
+def parse_usage_event(line: str) -> tuple[int, int, float] | None:
+    """Normalize structured usage lines; regex remains the legacy final fallback."""
+    try:
+        row = json.loads(_clean_output(line))
+    except Exception:
+        return None
+    usage = row.get("usage") or row.get("token_usage") or row.get("response", {}).get("usage") or row
+    ti = usage.get("input_tokens", usage.get("prompt_tokens", usage.get("tokens_in")))
+    to = usage.get("output_tokens", usage.get("completion_tokens", usage.get("tokens_out")))
+    cost = usage.get("total_cost_usd", usage.get("cost_usd", usage.get("cost",
+           row.get("total_cost_usd", row.get("cost_usd", row.get("cost", 0))))))
+    if ti is None and to is None and not cost:
+        return None
+    return int(ti or 0), int(to or 0), float(cost or 0)
 
 
 def _findings(text: str) -> list:

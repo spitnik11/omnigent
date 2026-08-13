@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -26,6 +26,43 @@ from .models import RunStatus, Store
 from .service import WorkflowService
 
 TERMINAL = {RunStatus.WAITING_FOR_USER, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+
+
+def _safe_paths(value, field: str) -> list[str]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be a list")
+    out = []
+    for raw in value:
+        path = str(raw).strip().replace("\\", "/")
+        p = PurePosixPath(path)
+        if not path or p.is_absolute() or ":" in p.parts[0] or ".." in p.parts:
+            raise ValueError(f"unsafe {field} path: {raw}")
+        out.append(str(p))
+    return out
+
+
+def _validate_tasks(tasks) -> list[dict] | None:
+    if tasks is None:
+        return None
+    if not isinstance(tasks, list) or not tasks:
+        raise ValueError("tasks must be a non-empty list")
+    clean = []
+    for i, raw in enumerate(tasks):
+        if not isinstance(raw, dict) or not str(raw.get("title", "")).strip():
+            raise ValueError(f"task {i} requires a title")
+        deps = raw.get("depends_on") or []
+        if not isinstance(deps, list) or any(not isinstance(d, int) or d < 0 or d >= i for d in deps):
+            raise ValueError(f"task {i} has invalid dependency indices")
+        t = dict(raw)
+        t["ownership"] = _safe_paths(t.get("ownership"), "ownership")
+        t["do_not_modify"] = _safe_paths(t.get("do_not_modify"), "do_not_modify")
+        t["depends_on"] = deps
+        t["priority"] = int(t.get("priority") or 0)
+        t["validation"] = str(t.get("validation") or "")
+        clean.append(t)
+    return clean
 
 
 def _git(cwd, *a):
@@ -105,7 +142,9 @@ class Runner:
                 self._make_tasks(svc, run, proj, goal, tasks, plan, mock, on_line)
                 svc.drive(run["id"], on_line=on_line)
             except Exception as e:  # noqa: BLE001
-                self._push(run["id"], {"type": "output", "agent": "system", "line": f"[error] {e}"})
+                svc.fail_run(run["id"], f"{type(e).__name__}: {e}")
+                self._push(run["id"], {"type": "output", "agent": "system",
+                                       "line": f"[error] workflow failed: {type(e).__name__}"})
 
         threading.Thread(target=drive, daemon=True).start()
         return run
@@ -131,7 +170,9 @@ class Runner:
                 run["id"], t["title"], description=t.get("description", ""),
                 agent=t.get("agent"),
                 acceptance_criteria=t.get("acceptance") or t.get("acceptance_criteria") or [],
-                depends_on=deps)
+                depends_on=deps, ownership=t.get("ownership"),
+                do_not_modify=t.get("do_not_modify"), validation=t.get("validation", ""),
+                priority=t.get("priority", 0))
             ids.append(row["id"])
 
     def snapshot(self, run_id) -> dict:
@@ -168,7 +209,8 @@ async def api_create(request):
         mode = "cloud" if str(d.get("mode", "local")).lower() == "cloud" else "local"
         plan = d.get("plan", True) is not False
         run = RUNNER.start(d.get("project_path", "").strip(), goal,
-                           d.get("tasks"), bool(d.get("mock")), mode=mode, plan=plan)
+                           _validate_tasks(d.get("tasks")), bool(d.get("mock")),
+                           mode=mode, plan=plan)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(run)

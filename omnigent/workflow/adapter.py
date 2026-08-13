@@ -126,7 +126,7 @@ class CliAgentAdapter(AgentAdapter):
                                 output=res.output)
         verdict, findings = _parse_verdict(res.output)
         ti, to, cost = _parse_usage(res.output)
-        return ReviewResult(verdict, summary=(res.output.splitlines()[0] if res.output else "")[:200],
+        return ReviewResult(verdict, summary=_review_summary(res.output),
                             findings=findings, output=res.output,
                             tokens_in=ti, tokens_out=to, cost_usd=cost)
 
@@ -202,8 +202,31 @@ def _parse_usage(output: str) -> tuple[int, int, float]:
 
 
 def _findings(text: str) -> list:
+    text = _clean_output(text)
+    verdict = list(_re.finditer(r"^VERDICT\s*:", text, _re.IGNORECASE | _re.MULTILINE))
+    if verdict:
+        text = text[max(0, text.rfind("\n", 0, verdict[-1].start()) - 4000):verdict[-1].start()]
+    marker = _re.search(r"(?:^|\n)(?:FINDINGS|CONCERNS)\s*:?[ \t]*\n", text, _re.IGNORECASE)
+    if marker:
+        text = text[marker.end():]
     return [l.strip("-* \t") for l in text.splitlines()
             if l.strip().startswith(("-", "*")) and len(l.strip("-* \t")) > 3][:8]
+
+
+def _clean_output(output: str) -> str:
+    text = _re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", output or "")
+    return "\n".join(line for line in text.splitlines() if line.strip())
+
+
+def _review_summary(output: str) -> str:
+    for line in _clean_output(output).splitlines():
+        low = line.lower()
+        if (low.startswith(("warning:", "warn ", "error:")) or "telemetry" in low
+                or "ignoring interface" in low or line.startswith("202")):
+            continue
+        if not line.lstrip().startswith(("-", "*", "VERDICT")):
+            return line[:200]
+    return ""
 
 
 def _capacity_limited(output: str) -> bool:
@@ -218,7 +241,7 @@ def _parse_verdict(output: str) -> tuple[str, list]:
     """Robust verdict extraction. Prefers an explicit 'VERDICT:' marker (last one wins);
     falls back to clear standalone signals; returns ABSTAIN when genuinely unclear so an
     unparseable review never becomes a FALSE rejection that blocks a good run."""
-    text = output or ""
+    text = _clean_output(output)
     marks = _re.findall(r"VERDICT\s*[:\-]?\s*(APPROVED|CHANGES[ _]?REQUESTED|REQUEST[ _]?CHANGES|BLOCKED)",
                         text, _re.IGNORECASE)
     if marks:

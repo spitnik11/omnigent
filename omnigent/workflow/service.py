@@ -172,11 +172,13 @@ class WorkflowService:
         adapter = self._adapter(agent)
         result = adapter.run(task, assignment["worktree_path"], run["integration_branch"], on_line=sink)
 
-        done = result.status == "completed"
+        problems, changed = self._implementation_problems(
+            task, run, result, assignment["worktree_path"])
+        done = result.status == "completed" and not problems
         self.store.update("assignments", aid,
                           status=AssignmentStatus.DONE if done else AssignmentStatus.FAILED,
                           finished_at=now(), commit_sha=result.commit_sha,
-                          files_changed=result.files_changed,
+                          files_changed=len(changed),
                           tokens_in=result.tokens_in, tokens_out=result.tokens_out,
                           cost_usd=result.cost_usd)
         if done:
@@ -185,9 +187,42 @@ class WorkflowService:
                              {"commit": result.commit_sha, "files_changed": result.files_changed})
         else:
             self.store.update("tasks", task["id"], status=TaskStatus.FAILED)
-            self.store.event(run["id"], "TASK_FAILED", task["id"], agent, {"summary": result.summary})
+            payload = {"summary": result.summary, "problems": problems}
+            self.store.event(run["id"], "IMPLEMENTATION_REJECTED" if problems else "TASK_FAILED",
+                             task["id"], agent, payload)
         return {"assignment_id": aid, "task_id": task["id"], "agent": agent,
                 "ok": done, "commit": result.commit_sha, "summary": result.summary}
+
+    @staticmethod
+    def _in_scope(path: str, scopes: list[str]) -> bool:
+        path = path.replace("\\", "/")
+        return any(path == s.rstrip("/") or path.startswith(s.rstrip("/") + "/") for s in scopes)
+
+    def _implementation_problems(self, task: dict, run: dict, result,
+                                 worktree: str) -> tuple[list[str], list[str]]:
+        base = subprocess.run(["git", "-C", worktree, "rev-parse", run["integration_branch"]],
+                              capture_output=True, text=True).stdout.strip()
+        diff = subprocess.run(["git", "-C", worktree, "diff", "--name-only",
+                               f'{run["integration_branch"]}...{result.commit_sha or "HEAD"}'],
+                              capture_output=True, text=True)
+        changed = [p.strip().replace("\\", "/") for p in diff.stdout.splitlines() if p.strip()]
+        dirty = subprocess.run(["git", "-C", worktree, "status", "--porcelain"],
+                               capture_output=True, text=True).stdout.strip()
+        problems = []
+        if not result.commit_sha or result.commit_sha == base:
+            problems.append("implementation did not create a new commit")
+        if not changed:
+            problems.append("implementation changed no files")
+        ownership = task.get("ownership") or []
+        outside = [p for p in changed if ownership and not self._in_scope(p, ownership)]
+        forbidden = [p for p in changed if self._in_scope(p, task.get("do_not_modify") or [])]
+        if outside:
+            problems.append("outside ownership: " + ", ".join(outside))
+        if forbidden:
+            problems.append("modified forbidden paths: " + ", ".join(forbidden))
+        if dirty:
+            problems.append("worktree has uncommitted changes")
+        return problems, changed
 
     def execute_run(self, run_id: str, on_line=None) -> list[dict]:
         """One scheduling pass: assign ready tasks (serial), run them concurrently.
@@ -314,14 +349,21 @@ class WorkflowService:
             if on_line: on_line(agent, task["id"], line)
         t2 = self._inject_task_context(t2, run, agent)
         result = self._adapter(agent).run(t2, wt, run["integration_branch"], on_line=sink)
+        problems, changed = self._implementation_problems(task, run, result, wt)
         self.store.update("assignments", asg["id"], commit_sha=result.commit_sha,
-                          files_changed=result.files_changed, finished_at=now(),
+                          files_changed=len(changed), finished_at=now(),
                           tokens_in=(asg["tokens_in"] or 0) + result.tokens_in,
                           tokens_out=(asg["tokens_out"] or 0) + result.tokens_out,
                           cost_usd=(asg["cost_usd"] or 0) + result.cost_usd)
+        if result.status != "completed" or problems:
+            self.store.update("tasks", task["id"], status=TaskStatus.FAILED)
+            self.store.event(run["id"], "IMPLEMENTATION_REJECTED", task["id"], agent,
+                             {"problems": problems or [result.summary], "revision": rev})
+            return result.commit_sha
         self.store.update("tasks", task["id"], status=TaskStatus.REVIEW_READY)
         self.store.event(run["id"], "COMMIT_CREATED", task["id"], agent,
-                         {"commit": result.commit_sha, "revision": rev})
+                         {"commit": result.commit_sha, "revision": rev,
+                          "files_changed": len(changed)})
         return result.commit_sha
 
     # -- integration + human gate -----------------------------------------
@@ -421,6 +463,7 @@ class WorkflowService:
     def drive(self, run_id: str, on_line=None, max_revisions: int = 1, max_cycles: int = 8) -> dict:
         """Run the whole loop: execute -> review -> revise -> integrate -> gate."""
         for _ in range(max_cycles):
+            self._fail_blocked_dependents(run_id)
             self.execute_run(run_id, on_line=on_line)
             progressed = False
             for t in self.store.query("tasks", "run_id=? AND status=?", (run_id, TaskStatus.REVIEW_READY)):
@@ -441,4 +484,25 @@ class WorkflowService:
             self.integrate_run(run_id)
         else:
             self.store.update("runs", run_id, status=RunStatus.WAITING_FOR_USER)
+        return self.run_summary(run_id)
+
+    def _fail_blocked_dependents(self, run_id: str) -> None:
+        tasks = {t["id"]: t for t in self.store.query("tasks", "run_id=?", (run_id,))}
+        for task in tasks.values():
+            if task["status"] not in (TaskStatus.PLANNED, TaskStatus.READY):
+                continue
+            failed = [d for d in task.get("depends_on") or []
+                      if d not in tasks or tasks[d]["status"] == TaskStatus.FAILED]
+            if failed:
+                self.store.update("tasks", task["id"], status=TaskStatus.FAILED)
+                self.store.event(run_id, "TASK_FAILED", task["id"], None,
+                                 {"reason": "dependency failed", "dependencies": failed})
+
+    def fail_run(self, run_id: str, reason: str = "workflow driver failed") -> dict:
+        for task in self.store.query("tasks", "run_id=?", (run_id,)):
+            if task["status"] in (TaskStatus.RUNNING, TaskStatus.REVIEW_READY,
+                                  TaskStatus.REVIEWING, TaskStatus.CHANGES_REQUESTED):
+                self.store.update("tasks", task["id"], status=TaskStatus.FAILED)
+        self.store.update("runs", run_id, status=RunStatus.FAILED, completed_at=now())
+        self.store.event(run_id, "RUN_FAILED", None, None, {"reason": reason[:200]})
         return self.run_summary(run_id)

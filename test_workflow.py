@@ -8,7 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from omnigent.workflow.adapter import MockAgentAdapter, ReviewResult, _capacity_limited
+from omnigent.workflow.adapter import (AgentResult, MockAgentAdapter, ReviewResult,
+                                       _capacity_limited, _parse_verdict, _review_summary)
 from omnigent.workflow.models import RunStatus, Store, TaskStatus
 from omnigent.workflow.service import WorkflowService
 
@@ -125,8 +126,64 @@ def test_limited_reviewer_is_skipped():
     print("limited-reviewer ok: claude skipped, codex + grok approved")
 
 
+def test_invalid_implementation_never_reaches_review():
+    tmp, repo, base = _mkrepo()
+
+    class NoopMock(MockAgentAdapter):
+        reviews = 0
+        def run(self, task, worktree_path, base_branch, on_line=None):
+            return AgentResult("completed", commit_sha=_git(repo, "rev-parse", base_branch))
+        def review(self, *args, **kwargs):
+            self.reviews += 1
+            return ReviewResult("APPROVED")
+
+    adapters = {}
+    def factory(agent):
+        return adapters.setdefault(agent, NoopMock(agent))
+
+    store = Store(tmp / "omni.db")
+    svc = WorkflowService(store=store, adapter_factory=factory)
+    proj = svc.create_project("proj", str(repo), default_branch=base)
+    run = svc.create_run(proj["id"], "No-op must fail")
+    task = svc.create_task(run["id"], "Feature", agent="aider", ownership=["src"])
+    svc.drive(run["id"])
+    assert store.get("tasks", task["id"])["status"] == TaskStatus.FAILED
+    assert not store.query("reviews", "task_id=?", (task["id"],))
+    events = store.query("run_events", "run_id=? AND event_type=?",
+                         (run["id"], "IMPLEMENTATION_REJECTED"))
+    assert events and "new commit" in " ".join(events[0]["payload"]["problems"])
+    print("implementation-guard ok: no-op rejected before review")
+
+
+def test_failed_dependency_finishes():
+    tmp, repo, base = _mkrepo()
+    store = Store(tmp / "omni.db")
+    svc = WorkflowService(store=store, mock=True)
+    proj = svc.create_project("proj", str(repo), default_branch=base)
+    run = svc.create_run(proj["id"], "Failed dependency")
+    first = svc.create_task(run["id"], "First")
+    second = svc.create_task(run["id"], "Second", depends_on=[first["id"]])
+    store.update("tasks", first["id"], status=TaskStatus.FAILED)
+    svc.drive(run["id"])
+    assert store.get("tasks", second["id"])["status"] == TaskStatus.FAILED
+    print("dependency-failure ok: dependent failed deterministically")
+
+
+def test_review_output_parsing():
+    output = "\x1b[33m2026-08-13 WARN telemetry startup\x1b[0m\n" \
+             "Reviewed the actual changes.\nFINDINGS:\n- real concern\nVERDICT: CHANGES_REQUESTED\n" \
+             "- prompt bullet after verdict"
+    verdict, findings = _parse_verdict(output)
+    assert verdict == "CHANGES_REQUESTED" and findings == ["real concern"], findings
+    assert _review_summary(output) == "Reviewed the actual changes."
+    print("review-parser ok: warnings and prompt bullets excluded")
+
+
 if __name__ == "__main__":
     test_full_loop()
     test_revision_loop()
     test_limited_reviewer_is_skipped()
+    test_invalid_implementation_never_reaches_review()
+    test_failed_dependency_finishes()
+    test_review_output_parsing()
     print("workflow self-check ok")

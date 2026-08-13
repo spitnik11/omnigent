@@ -85,7 +85,7 @@ def contract_prompt(task: dict) -> str:
 
 class AgentAdapter:
     name = "base"
-    def run(self, task: dict, worktree_path: str, base_branch: str, on_line=None) -> AgentResult:
+    def run(self, task: dict, worktree_path: str, base_branch: str, on_line=None, on_start=None) -> AgentResult:
         raise NotImplementedError
     def review(self, task: dict, diff: str, commit_sha: str, on_line=None, cwd=None) -> ReviewResult:
         raise NotImplementedError
@@ -101,11 +101,11 @@ class CliAgentAdapter(AgentAdapter):
         h = load_harnesses(load_config()).get(self.name)
         return h if (h and h.available) else None
 
-    def run(self, task, worktree_path, base_branch, on_line=None):
+    def run(self, task, worktree_path, base_branch, on_line=None, on_start=None):
         h = self._harness()
         if not h:
             return AgentResult("failed", summary=f"agent '{self.name}' unavailable")
-        res = run_harness(h, contract_prompt(task), worktree_path, on_line=on_line)
+        res = run_harness(h, contract_prompt(task), worktree_path, on_line=on_line, on_start=on_start)
         ti, to, cost = _parse_usage(res.output)
         return AgentResult(
             status="completed" if res.ok else "failed",
@@ -137,7 +137,7 @@ class MockAgentAdapter(AgentAdapter):
     def __init__(self, agent: str):
         self.name = agent
 
-    def run(self, task, worktree_path, base_branch, on_line=None):
+    def run(self, task, worktree_path, base_branch, on_line=None, on_start=None):
         emit = on_line or (lambda _l: None)
         rev = task.get("revisions", 0)
         emit(f"starting {task['title']}" + (f" (revision {rev})" if rev else ""))

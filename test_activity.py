@@ -5,6 +5,7 @@ from pathlib import Path
 
 from omnigent.workflow.activity import TranscriptStore, normalize
 from omnigent.workflow.webapi import FEED_LIMIT, REPLAY_LIMIT, Runner
+from omnigent.web import PAGE
 
 
 def main():
@@ -29,6 +30,9 @@ def main():
     assert normalize({"type": "output", "line": "\x1b[33m\x1b[0m"}) is None
     tool = normalize({"type": "output", "agent": "grok", "line": "→ Read file.py"})
     assert tool["kind"] == "tool" and "\x1b" not in tool["line"]
+    for required in ("feed_batch", "requestAnimationFrame", "DocumentFragment",
+                     "aria-expanded", "Collapse completed", "Load earlier"):
+        assert required in PAGE, required
     print("activity stress self-check ok: 20000 persisted, feed/replay bounded")
 
 

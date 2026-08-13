@@ -36,6 +36,7 @@ class WorkflowService:
         self.store = store or Store()
         self.mock = mock
         self.logs: dict[str, list[str]] = {}   # assignment_id -> live output lines
+        self.processes: dict[str, object] = {}  # assignment_id -> owned subprocess
         # injectable so tests can script agent behaviour (revision loop, etc.)
         self._adapter = adapter_factory or (lambda agent: get_adapter(agent, mock=self.mock))
         # Optional RAG. None = today's exact behaviour. Never allowed to fail a run.
@@ -170,7 +171,9 @@ class WorkflowService:
 
         task = self._inject_task_context(task, run, agent)
         adapter = self._adapter(agent)
-        result = adapter.run(task, assignment["worktree_path"], run["integration_branch"], on_line=sink)
+        result = adapter.run(task, assignment["worktree_path"], run["integration_branch"],
+                             on_line=sink, on_start=lambda p: self.processes.__setitem__(aid, p))
+        self.processes.pop(aid, None)
 
         problems, changed = self._implementation_problems(
             task, run, result, assignment["worktree_path"])
@@ -484,6 +487,26 @@ class WorkflowService:
             self.integrate_run(run_id)
         else:
             self.store.update("runs", run_id, status=RunStatus.WAITING_FOR_USER)
+        return self.run_summary(run_id)
+
+    def cancel_run(self, run_id: str) -> dict:
+        run = self.store.get("runs", run_id)
+        if not run or run["status"] in (RunStatus.COMPLETED, RunStatus.CANCELLED):
+            return self.run_summary(run_id) if run else {}
+        task_ids = {t["id"] for t in self.store.query("tasks", "run_id=?", (run_id,))}
+        for asg in [a for tid in task_ids for a in self.store.query("assignments", "task_id=?", (tid,))]:
+            process = self.processes.pop(asg["id"], None)
+            if process and process.poll() is None:
+                try: process.kill()
+                except Exception: pass
+            if asg["status"] == AssignmentStatus.RUNNING:
+                self.store.update("assignments", asg["id"], status=AssignmentStatus.CANCELLED,
+                                  finished_at=now())
+        for task in self.store.query("tasks", "run_id=?", (run_id,)):
+            if task["status"] not in (TaskStatus.APPROVED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+                self.store.update("tasks", task["id"], status=TaskStatus.CANCELLED)
+        self.store.update("runs", run_id, status=RunStatus.CANCELLED, completed_at=now())
+        self.store.event(run_id, "RUN_CANCELLED", None, None, {})
         return self.run_summary(run_id)
 
     def _fail_blocked_dependents(self, run_id: str) -> None:

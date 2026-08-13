@@ -261,6 +261,12 @@ async def api_approve(request):
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse(RUNNER.svc_real.approve_run(rid))
 
+async def api_cancel(request):
+    rid = request.path_params["rid"]
+    if not RUNNER.store.get("runs", rid):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return JSONResponse(RUNNER.svc_real.cancel_run(rid))
+
 async def api_transcript(request):
     rid = request.path_params["rid"]
     if not RUNNER.store.get("runs", rid):
@@ -309,6 +315,7 @@ routes = [
     Route("/api/runs", api_create, methods=["POST"]),
     Route("/api/runs/{rid}", api_run),
     Route("/api/runs/{rid}/approve", api_approve, methods=["POST"]),
+    Route("/api/runs/{rid}/cancel", api_cancel, methods=["POST"]),
     Route("/api/runs/{rid}/transcript", api_transcript),
     Route("/api/runs/{rid}/stream", api_stream),
 ]

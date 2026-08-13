@@ -131,7 +131,7 @@ def test_invalid_implementation_never_reaches_review():
 
     class NoopMock(MockAgentAdapter):
         reviews = 0
-        def run(self, task, worktree_path, base_branch, on_line=None):
+        def run(self, task, worktree_path, base_branch, on_line=None, on_start=None):
             return AgentResult("completed", commit_sha=_git(repo, "rev-parse", base_branch))
         def review(self, *args, **kwargs):
             self.reviews += 1
@@ -179,6 +179,19 @@ def test_review_output_parsing():
     print("review-parser ok: warnings and prompt bullets excluded")
 
 
+def test_cancel_run():
+    tmp, repo, base = _mkrepo()
+    store = Store(tmp / "omni.db")
+    svc = WorkflowService(store=store, mock=True)
+    proj = svc.create_project("proj", str(repo), default_branch=base)
+    run = svc.create_run(proj["id"], "Cancel me")
+    task = svc.create_task(run["id"], "Waiting")
+    svc.cancel_run(run["id"])
+    assert store.get("runs", run["id"])["status"] == RunStatus.CANCELLED
+    assert store.get("tasks", task["id"])["status"] == TaskStatus.CANCELLED
+    print("cancel ok: run and task cancelled")
+
+
 if __name__ == "__main__":
     test_full_loop()
     test_revision_loop()
@@ -186,4 +199,5 @@ if __name__ == "__main__":
     test_invalid_implementation_never_reaches_review()
     test_failed_dependency_finishes()
     test_review_output_parsing()
+    test_cancel_run()
     print("workflow self-check ok")

@@ -238,9 +238,12 @@ function renderActivity(item,fragment){
   row._count++;row._title.textContent=(item.summary||item.event||'activity')+(row._count>1?' · '+row._count:'');
   for(const text of (item.details||[item.line]).filter(Boolean)){const line=document.createElement('div');line.className='activity-line';line.textContent=text;row._lines.appendChild(line);}
   group.state.textContent=item.state||'active';pruneDetails();filterActivity();
+  if(['TASK_APPROVED','TASK_INTEGRATED'].includes(item.event))group.activities.forEach(x=>{x.classList.remove('active');x.classList.add('completed');x.open=false;});
+  if(['TASK_FAILED','IMPLEMENTATION_REJECTED'].includes(item.event))group.activities.forEach(x=>{x.classList.remove('active');x.classList.add('failed');x.open=true;});
 }
 function pruneDetails(){const lines=[...document.querySelectorAll('.activity-line')];for(let i=0;i<lines.length-2000;i++)lines[i].remove();}
-function queueBatch(items){S.queue.push(...items);if(S.raf)return;const t=$('#transcript'),follow=t.scrollHeight-t.scrollTop-t.clientHeight<80;
+function queueBatch(items){const seqs=items.filter(x=>!x.synthetic&&x.seq!=null).map(x=>x.seq);if(seqs.length)S.before=S.before==null?Math.min(...seqs):Math.min(S.before,...seqs);
+  S.queue.push(...items);if(S.raf)return;const t=$('#transcript'),follow=t.scrollHeight-t.scrollTop-t.clientHeight<80;
   const draw=()=>{const frag=document.createDocumentFragment(),chunk=S.queue.splice(0,150);chunk.forEach(x=>renderActivity(x,frag));
     if(S.queue.length)S.raf=requestAnimationFrame(draw);else{S.raf=null;if(follow)scheduleScroll();}};S.raf=requestAnimationFrame(draw);}
 function scheduleScroll(){if(S.scrollRaf)return;S.scrollRaf=requestAnimationFrame(()=>{const t=$('#transcript');t.scrollTop=t.scrollHeight;S.scrollRaf=null;});}
@@ -323,7 +326,9 @@ $('#stop-btn').onclick=async()=>{if(confirm('Stop this run? Worktrees and commit
 $('#expand-all').onclick=()=>document.querySelectorAll('.activity').forEach(x=>x.open=true);
 $('#collapse-done').onclick=()=>document.querySelectorAll('.activity.completed,.activity.skipped').forEach(x=>x.open=false);
 $('#log-search').oninput=filterActivity;
-$('#load-earlier').onclick=async()=>{if(!S.sel)return;const url='/api/runs/'+S.sel+'/transcript?limit=500'+(S.before!=null?'&before='+S.before:'');const page=await api(url);if(!page)return;S.before=page.before;queueBatch(page.items||[]);};
+$('#load-earlier').onclick=async()=>{if(!S.sel)return;const btn=$('#load-earlier'),url='/api/runs/'+S.sel+'/transcript?limit=500'+(S.before!=null?'&before='+S.before:'');const page=await api(url);if(!page)return;
+  if(!(page.items||[]).length){btn.textContent='No earlier activity';btn.disabled=true;return;}
+  S.before=page.before;queueBatch(page.items);btn.textContent='Load earlier';};
 $('#goal').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 loadState();
 </script>

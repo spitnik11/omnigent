@@ -5,6 +5,7 @@ from pathlib import Path
 
 from omnigent.workflow.activity import TranscriptStore, normalize
 from omnigent.workflow.webapi import FEED_LIMIT, REPLAY_LIMIT, Runner
+from omnigent.workflow.models import Store
 from omnigent.web import PAGE
 
 
@@ -32,13 +33,23 @@ def main():
     restarted.sequences = defaultdict(int)
     restarted.feed_lock = threading.Lock()
     restarted.transcripts = runner.transcripts
+    restarted.store = Store(Path(tempfile.mkdtemp()) / "legacy.db")
     restored = restarted.replay("run_stress")
     assert len(restored) == REPLAY_LIMIT + 1 and restarted.sequences["run_stress"] == 20_000
+    legacy = object.__new__(Runner)
+    legacy.feeds = defaultdict(lambda: deque(maxlen=FEED_LIMIT))
+    legacy.sequences = defaultdict(int)
+    legacy.feed_lock = threading.Lock()
+    legacy.transcripts = TranscriptStore(Path(tempfile.mkdtemp()) / "empty")
+    legacy.store = Store(Path(tempfile.mkdtemp()) / "legacy.db")
+    legacy.store.event("old_run", "TASK_APPROVED", "old_task", "codex", {})
+    history = legacy.replay("old_run")
+    assert len(history) == 1 and history[0]["event"] == "TASK_APPROVED" and history[0]["legacy"]
     assert normalize({"type": "output", "line": "\x1b[33m\x1b[0m"}) is None
     tool = normalize({"type": "output", "agent": "grok", "line": "→ Read file.py"})
     assert tool["kind"] == "tool" and "\x1b" not in tool["line"]
     for required in ("feed_batch", "requestAnimationFrame", "DocumentFragment",
-                     "aria-expanded", "Collapse completed", "Load earlier"):
+                     "aria-expanded", "Collapse completed", "Load earlier", "No earlier activity"):
         assert required in PAGE, required
     print("activity stress self-check ok: 20000 persisted, feed/replay bounded")
 

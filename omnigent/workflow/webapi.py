@@ -125,6 +125,8 @@ class Runner:
             retained = list(self.feeds.get(run_id, ()))
         if not retained:
             persisted = self.transcripts.page(run_id, limit=FEED_LIMIT)["items"]
+            if not persisted:
+                persisted = self._legacy_events(run_id)
             if persisted:
                 with self.feed_lock:
                     self.feeds[run_id].extend(persisted)
@@ -142,6 +144,19 @@ class Runner:
                              "seq": batch[0]["seq"] - 1 if batch else 0,
                              "timestamp": timestamp(), "synthetic": True})
         return batch
+
+    def _legacy_events(self, run_id: str) -> list[dict]:
+        """Give pre-transcript runs a useful event history from authoritative SQLite state."""
+        rows = []
+        for seq, event in enumerate(self.store.query(
+                "run_events", "run_id=?", (run_id,), order="id"), 1):
+            item = normalize({"type": "event", "event": event["event_type"],
+                              "task": event["task_id"], "agent": event["agent"],
+                              "payload": event["payload"]})
+            if item:
+                rows.append({**item, "run_id": run_id, "seq": seq,
+                             "timestamp": event["created_at"], "legacy": True})
+        return rows
 
     def _on_event(self, row):
         self._push(row["run_id"], {"type": "event", "event": row["event_type"],

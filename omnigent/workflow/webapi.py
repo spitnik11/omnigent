@@ -70,7 +70,7 @@ class Runner:
                                    "task": row["task_id"], "agent": row["agent"],
                                    "payload": row["payload"]})
 
-    def start(self, project_path, goal, tasks, mock) -> dict:
+    def start(self, project_path, goal, tasks, mock, mode="local") -> dict:
         svc = self.svc_mock if mock else self.svc_real
         if not project_path:
             if not mock:
@@ -83,7 +83,7 @@ class Runner:
         if not proj:
             base = _git(project_path, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
             proj = svc.create_project(Path(project_path).name, str(project_path), default_branch=base)
-        run = svc.create_run(proj["id"], goal)
+        run = svc.create_run(proj["id"], goal, mode=mode)
         for t in (tasks or [{"title": goal}]):
             svc.create_task(run["id"], t["title"], description=t.get("description", ""),
                             agent=t.get("agent"), acceptance_criteria=t.get("acceptance", []))
@@ -143,8 +143,9 @@ async def api_create(request):
     if not goal:
         return JSONResponse({"error": "goal required"}, status_code=400)
     try:
+        mode = "cloud" if str(d.get("mode", "local")).lower() == "cloud" else "local"
         run = RUNNER.start(d.get("project_path", "").strip(), goal,
-                           d.get("tasks"), bool(d.get("mock")))
+                           d.get("tasks"), bool(d.get("mock")), mode=mode)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(run)

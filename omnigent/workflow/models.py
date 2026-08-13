@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS projects (
   default_branch TEXT DEFAULT 'main', test_command TEXT DEFAULT '', created_at TEXT);
 CREATE TABLE IF NOT EXISTS runs (
   id TEXT PRIMARY KEY, project_id TEXT, goal TEXT, status TEXT,
-  base_branch TEXT, integration_branch TEXT, created_at TEXT, completed_at TEXT);
+  base_branch TEXT, integration_branch TEXT, mode TEXT DEFAULT 'local',
+  created_at TEXT, completed_at TEXT);
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY, run_id TEXT, title TEXT, description TEXT, status TEXT,
   priority INTEGER DEFAULT 0, depends_on TEXT DEFAULT '[]',
@@ -94,6 +95,12 @@ class Store:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        # additive migrations — add columns to older DBs; harmless if already present
+        for stmt in ("ALTER TABLE runs ADD COLUMN mode TEXT DEFAULT 'local'",):
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
         self.on_event = None   # optional callback(row) for live streaming
 

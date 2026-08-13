@@ -153,13 +153,17 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
     <div class="composer">
       <div class="opts">
         <input type="text" id="project" placeholder="git repo path (blank + demo = throwaway repo)">
-        <label class="toggle"><input type="checkbox" id="mock" checked style="width:auto"> demo (mock agents)</label>
+        <select id="mode" title="Local = free local agents implement; Cloud = cloud agents implement. Both always reviewed by cloud." style="width:auto;padding:6px 9px;font-size:12px;background:#141310;border:1px solid var(--line2);border-radius:8px;color:var(--ink)">
+          <option value="local">Local · implement (free)</option>
+          <option value="cloud">Cloud · implement</option>
+        </select>
+        <label class="toggle"><input type="checkbox" id="mock" checked style="width:auto"> demo (mock)</label>
       </div>
       <div class="box">
         <textarea id="goal" placeholder="Give the agents a goal…  (Enter to run, Shift+Enter for newline)"></textarea>
         <button class="btn primary" id="send">Run</button>
       </div>
-      <div class="hint" id="hint">Demo mode runs mock agents in a throwaway repo — instant &amp; free. Uncheck to drive your real CLIs on a real repo.</div>
+      <div class="hint" id="hint">One system, two modes: <b>Local</b> = free local agents write the code, <b>Cloud</b> = cloud agents write it — <b>both are always reviewed by the cloud agents</b> and nothing is finished without approval. Demo = mock agents in a throwaway repo.</div>
     </div>
   </main>
 </div>
@@ -241,7 +245,8 @@ async function refreshSnapshot(){
   if(!S.sel)return; const s=await api('/api/runs/'+S.sel); if(!s||!s.run)return;
   $('#title').textContent=s.run.goal;
   const dot=STATUSDOT[s.run.status]||'○';
-  $('#run-status').innerHTML=`<span class="dot">${dot}</span>${s.run.status.replace(/_/g,' ').toLowerCase()}`;
+  const modeTag = s.run.mode ? `<span class="agent-chip" style="margin-left:8px">${s.run.mode==='cloud'?'☁ cloud':'⛁ local'}</span>` : '';
+  $('#run-status').innerHTML=`<span class="dot">${dot}</span>${s.run.status.replace(/_/g,' ').toLowerCase()}${modeTag}`;
   const su=s.summary;
   $('#cost').innerHTML=`&#8593; ${fmt(su.tokens_in)} &#8595; ${fmt(su.tokens_out)} &middot; <b>$${(su.cost_usd||0).toFixed(4)}</b>`;
   $('#tasks').innerHTML=s.tasks.length?s.tasks.map(t=>{
@@ -257,7 +262,7 @@ function fmt(n){n=n||0;return n>=1000?(n/1000).toFixed(1)+'k':n;}
 async function send(){
   const goal=$('#goal').value.trim(); if(!goal)return;
   $('#send').disabled=true;
-  const body={goal, project_path:$('#project').value.trim(), mock:$('#mock').checked};
+  const body={goal, project_path:$('#project').value.trim(), mock:$('#mock').checked, mode:$('#mode').value};
   const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('#send').disabled=false;
   if(!r){alert('server unreachable');return;}

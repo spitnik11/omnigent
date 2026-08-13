@@ -63,7 +63,7 @@ class WorkflowService:
         self.store.insert("projects", row)
         return row
 
-    def create_run(self, project_id, goal) -> dict:
+    def create_run(self, project_id, goal, mode="local") -> dict:
         proj = self.store.get("projects", project_id)
         if not proj:
             raise ValueError(f"no project {project_id}")
@@ -72,7 +72,8 @@ class WorkflowService:
         integ = f"omni/{_slug(goal)}-{rid.split('_')[1]}"
         row = {"id": rid, "project_id": project_id, "goal": goal,
                "status": RunStatus.PLANNING, "base_branch": base,
-               "integration_branch": integ, "created_at": now(), "completed_at": None}
+               "integration_branch": integ, "mode": mode,
+               "created_at": now(), "completed_at": None}
         self.store.insert("runs", row)
         # create the integration branch off base so task worktrees can branch from it
         wm = WorktreeManager(proj["repo_path"])
@@ -106,20 +107,27 @@ class WorkflowService:
                 if t["status"] in (TaskStatus.PLANNED, TaskStatus.READY)
                 and self._deps_approved(t)]
 
-    def _impl_order(self) -> list[str]:
-        """Implementer preference: reliable free local agents first (offload), then cloud."""
+    def _impl_order(self, mode: str = "local") -> list[str]:
+        """Implementer preference by mode. Reviews are ALWAYS cloud (see request_reviews).
+        cloud mode -> cloud agents implement. local mode -> free local agents implement
+        (offload), cloud fallback. Nothing is ever finished without cloud review either way.
+        """
         try:
             hs = load_harnesses(load_config())
         except Exception:  # noqa: BLE001
             return list(AGENTS)
-        order = [n for n in LOCAL_IMPL if n in hs and hs[n].available]     # offload target(s)
-        order += [a for a in AGENTS if a in hs and hs[a].available]        # cloud (also reviewers)
-        return order or list(AGENTS)
+        cloud = [a for a in AGENTS if a in hs and hs[a].available]
+        if mode == "cloud":
+            return cloud or list(AGENTS)
+        local = [n for n in LOCAL_IMPL if n in hs and hs[n].available]     # offload targets
+        return (local + [a for a in cloud if a not in local]) or list(AGENTS)
 
     def _pick_agent(self, task: dict, busy: set[str]) -> str | None:
         if task.get("assigned_agent"):
             return task["assigned_agent"] if task["assigned_agent"] not in busy else None
-        for a in self._impl_order():
+        run = self.store.get("runs", task["run_id"])
+        mode = (run or {}).get("mode") or "local"
+        for a in self._impl_order(mode):
             if a not in busy:
                 return a
         return None

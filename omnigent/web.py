@@ -191,7 +191,10 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
 </div>
 <script>
 const $=s=>document.querySelector(s);
-const api=(u,o)=>fetch(u,o).then(r=>r.ok?r.json():Promise.reject(r.status)).catch(()=>null);
+const api=(u,o)=>fetch(u,o).then(async r=>{
+  const data=await r.json().catch(()=>({}));
+  return r.ok?data:{...data,error:data.error||`request failed (${r.status})`};
+}).catch(()=>null);
 const S={sel:null, es:null, poll:null, harnesses:{},seen:new Set(),groups:new Map(),raf:null,
   queue:[],scrollRaf:null,before:null};
 

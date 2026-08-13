@@ -49,7 +49,8 @@ def main():
     tool = normalize({"type": "output", "agent": "grok", "line": "→ Read file.py"})
     assert tool["kind"] == "tool" and "\x1b" not in tool["line"]
     for required in ("feed_batch", "requestAnimationFrame", "DocumentFragment",
-                     "aria-expanded", "Collapse completed", "Load earlier", "No earlier activity"):
+                     "aria-expanded", "Collapse completed", "Load earlier", "No earlier activity",
+                     "if(item.state==='active'){row.open=true"):
         assert required in PAGE, required
     print("activity stress self-check ok: 20000 persisted, feed/replay bounded")
 

@@ -224,14 +224,13 @@ function taskGroup(item){
   const state=document.createElement('span');state.className='agent-chip';state.textContent='active';
   head.append(label,state);const body=document.createElement('div');body.className='task-body';
   head.onclick=()=>{const open=body.classList.toggle('hidden');head.setAttribute('aria-expanded',String(!open));};
-  box.append(head,body);$('#transcript').appendChild(box);const group={box,body,label,state,activities:new Map()};S.groups.set(key,group);return group;
+  box.append(head,body);$('#transcript').appendChild(box);const group={box,head,body,label,state,activities:new Map()};S.groups.set(key,group);return group;
 }
 function activityKey(item){return [item.task||'_run',item.kind||'output',item.agent||'omni',item.state||'active'].join('|');}
 function renderActivity(item,fragment){
   if(item.seq!=null&&S.seen.has(item.seq))return;if(item.seq!=null)S.seen.add(item.seq);
   const group=taskGroup(item),key=activityKey(item);let row=group.activities.get(key);
-  if(!row){row=document.createElement('details');row.className='activity '+(item.state||'active');
-    row.open=!['completed','skipped'].includes(item.state)||['error','revision'].includes(item.kind);
+  if(!row){row=document.createElement('details');row.className='activity '+(item.state||'active');row.open=true;
     const sum=document.createElement('summary'),kind=document.createElement('span'),title=document.createElement('span'),meta=document.createElement('span');
     kind.className='kind';kind.textContent=item.kind||'output';title.className='summary';title.textContent=item.summary||item.event||'activity';
     meta.className='meta';meta.textContent=item.agent||'';sum.append(kind,title,meta);
@@ -240,8 +239,9 @@ function renderActivity(item,fragment){
   }
   row._count++;row._title.textContent=(item.summary||item.event||'activity')+(row._count>1?' · '+row._count:'');
   for(const text of (item.details||[item.line]).filter(Boolean)){const line=document.createElement('div');line.className='activity-line';line.textContent=text;row._lines.appendChild(line);}
+  if(item.state==='active'){row.open=true;group.body.classList.remove('hidden');group.head.setAttribute('aria-expanded','true');}
   group.state.textContent=item.state||'active';pruneDetails();filterActivity();
-  if(['TASK_APPROVED','TASK_INTEGRATED'].includes(item.event))group.activities.forEach(x=>{x.classList.remove('active');x.classList.add('completed');x.open=false;});
+  if(['TASK_APPROVED','TASK_INTEGRATED'].includes(item.event))group.activities.forEach(x=>{x.classList.remove('active');x.classList.add('completed');});
   if(['TASK_FAILED','IMPLEMENTATION_REJECTED'].includes(item.event))group.activities.forEach(x=>{x.classList.remove('active');x.classList.add('failed');x.open=true;});
 }
 function pruneDetails(){const lines=[...document.querySelectorAll('.activity-line')];for(let i=0;i<lines.length-2000;i++)lines[i].remove();}

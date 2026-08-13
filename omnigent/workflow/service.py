@@ -247,7 +247,9 @@ class WorkflowService:
         for r in [a for a in AGENTS if a != implementer]:
             self.store.event(run["id"], "REVIEW_STARTED", task["id"], r, {"commit": commit})
             cb = (lambda line, a=r: on_line(a, task["id"], line)) if on_line else None
-            rr = self._adapter(r).review(rtask, diff, commit, on_line=cb, cwd=proj["repo_path"])
+            # review INSIDE the implementer's worktree (checked out at the commit) so the
+            # reviewer can read the actual files, not just the diff text.
+            rr = self._adapter(r).review(rtask, diff, commit, on_line=cb, cwd=asg["worktree_path"])
             self.store.insert("reviews", {
                 "id": new_id("rev"), "task_id": task["id"], "assignment_id": asg["id"],
                 "reviewer_agent": r, "reviewed_commit_sha": commit, "verdict": rr.verdict,
@@ -257,24 +259,26 @@ class WorkflowService:
         return self.evaluate_task(task)
 
     def evaluate_task(self, task: dict) -> str:
-        """Consensus (plan section 20): any CHANGES_REQUESTED wins; else >=2 APPROVED -> APPROVED.
-        Only reviews pinned to the CURRENT commit count — stale reviews are ignored."""
+        """Consensus (plan section 20). Only reviews pinned to the CURRENT commit count.
+        A real rejection (CHANGES_REQUESTED/BLOCKED) wins. ABSTAIN (unparseable review) is
+        ignored — it never becomes a false rejection. Else >=2 real APPROVALS -> APPROVED."""
         task = self.store.get("tasks", task["id"])
         asg = self._latest_impl(task)
         commit = asg["commit_sha"] if asg else None
         reviews = [r for r in self.store.query("reviews", "task_id=?", (task["id"],))
                    if r["reviewed_commit_sha"] == commit]
-        changes = [r for r in reviews if r["verdict"] != Verdict.APPROVED]
-        if changes:
-            findings = [f for r in changes for f in (r["findings"] or [r["summary"]])]
+        rejections = [r for r in reviews if r["verdict"] in (Verdict.CHANGES_REQUESTED, Verdict.BLOCKED)]
+        approvals = [r for r in reviews if r["verdict"] == Verdict.APPROVED]
+        if rejections:
+            findings = [f for r in rejections for f in (r["findings"] or [r["summary"]])]
             self.store.update("tasks", task["id"], status=TaskStatus.CHANGES_REQUESTED)
             self.store.event(task["run_id"], "CHANGES_REQUESTED", task["id"], None, {"findings": findings})
             return TaskStatus.CHANGES_REQUESTED
-        if sum(1 for r in reviews if r["verdict"] == Verdict.APPROVED) >= MIN_APPROVALS:
+        if len(approvals) >= MIN_APPROVALS:
             self.store.update("tasks", task["id"], status=TaskStatus.APPROVED)
             self.store.event(task["run_id"], "TASK_APPROVED", task["id"], None, {"commit": commit})
             return TaskStatus.APPROVED
-        return task["status"]
+        return task["status"]   # only abstains / not enough approvals -> waits (never a false fail)
 
     def revise_task(self, task: dict, on_line=None) -> str:
         """Re-run the implementer in the SAME worktree with the review findings.

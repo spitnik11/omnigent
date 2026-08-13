@@ -45,6 +45,7 @@ class Role:
 
 class Verdict:
     APPROVED = "APPROVED"; CHANGES_REQUESTED = "CHANGES_REQUESTED"; BLOCKED = "BLOCKED"
+    ABSTAIN = "ABSTAIN"   # reviewer gave no parseable verdict — does NOT count as a rejection
 
 
 def now() -> str:

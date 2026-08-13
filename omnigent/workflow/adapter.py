@@ -48,16 +48,16 @@ def review_prompt(task: dict, diff: str, commit_sha: str) -> str:
     kb = task.get("_knowledge")
     prefix = (kb + "\n\n---\n\n") if kb else ""
     return prefix + (
-        f"You are REVIEWING commit {commit_sha[:8]} for task: {task['title']}\n\n"
-        "Do NOT modify code. Do NOT delegate. Review the diff below against the "
-        "task's acceptance criteria for correctness, security, tests, regressions, "
-        "and maintainability.\n\n"
+        f"You are REVIEWING commit {commit_sha[:8]} for task: {task['title']}\n"
+        "You are inside the project working tree AT this commit — read the actual files as "
+        "needed (they are present). Do NOT modify anything. Do NOT delegate.\n\n"
         f"ACCEPTANCE CRITERIA\n{ac}\n\n"
-        f"DIFF\n{diff[:12000]}\n\n"
-        "Respond with a first line that is EXACTLY one of:\n"
+        f"CHANGES (diff)\n{diff[:12000]}\n\n"
+        "Judge correctness, security, tests, regressions, maintainability. If changes are "
+        "needed, list each concern on its own line starting with '-'.\n"
+        "Then END your reply with a FINAL line that is EXACTLY one of:\n"
         "VERDICT: APPROVED\n"
-        "VERDICT: CHANGES_REQUESTED\n"
-        "Then, if changes are requested, list each concern on its own line."
+        "VERDICT: CHANGES_REQUESTED"
     )
 
 
@@ -198,17 +198,32 @@ def _parse_usage(output: str) -> tuple[int, int, float]:
     return ti, to, cost
 
 
+def _findings(text: str) -> list:
+    return [l.strip("-* \t") for l in text.splitlines()
+            if l.strip().startswith(("-", "*")) and len(l.strip("-* \t")) > 3][:8]
+
+
 def _parse_verdict(output: str) -> tuple[str, list]:
-    """Extract APPROVED / CHANGES_REQUESTED and any listed findings."""
+    """Robust verdict extraction. Prefers an explicit 'VERDICT:' marker (last one wins);
+    falls back to clear standalone signals; returns ABSTAIN when genuinely unclear so an
+    unparseable review never becomes a FALSE rejection that blocks a good run."""
     text = output or ""
+    marks = _re.findall(r"VERDICT\s*[:\-]?\s*(APPROVED|CHANGES[ _]?REQUESTED|REQUEST[ _]?CHANGES|BLOCKED)",
+                        text, _re.IGNORECASE)
+    if marks:
+        v = marks[-1].upper()
+        if "APPROV" in v: return "APPROVED", []
+        if "BLOCK" in v: return "BLOCKED", _findings(text)
+        return "CHANGES_REQUESTED", _findings(text)
     up = text.upper()
-    if "CHANGES_REQUESTED" in up or "CHANGES REQUESTED" in up:
-        findings = [l.strip("-* \t") for l in text.splitlines()
-                    if l.strip().startswith(("-", "*")) and l.strip("-* \t")][:8]
-        return "CHANGES_REQUESTED", findings
-    if "APPROVED" in up:
+    approve = any(s in up for s in ("APPROVED", "LGTM", "LOOKS GOOD"))
+    changes = any(s in up for s in ("CHANGES_REQUESTED", "CHANGES REQUESTED", "REQUEST CHANGES",
+                                    "REQUESTING CHANGES", "NEEDS CHANGES"))
+    if changes and not approve:
+        return "CHANGES_REQUESTED", _findings(text)
+    if approve and not changes:
         return "APPROVED", []
-    return "CHANGES_REQUESTED", ["reviewer gave no clear verdict"]  # fail safe
+    return "ABSTAIN", []
 
 
 def get_adapter(agent: str, mock: bool = False) -> AgentAdapter:

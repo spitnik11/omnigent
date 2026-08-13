@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections import defaultdict, deque
 from pathlib import Path, PurePosixPath
 
 from starlette.responses import JSONResponse
@@ -24,8 +25,11 @@ except Exception:  # pragma: no cover
 
 from .models import RunStatus, Store
 from .service import WorkflowService
+from .activity import TranscriptStore, normalize, timestamp
 
 TERMINAL = {RunStatus.WAITING_FOR_USER, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+FEED_LIMIT = 5000
+REPLAY_LIMIT = 800
 
 
 def _safe_paths(value, field: str) -> list[str]:
@@ -88,7 +92,10 @@ class Runner:
         self.knowledge = self._load_knowledge()
         self.svc_real = WorkflowService(store=self.store, mock=False, knowledge=self.knowledge)
         self.svc_mock = WorkflowService(store=self.store, mock=True, knowledge=self.knowledge)
-        self.feeds: dict[str, list[dict]] = {}
+        self.feeds: dict[str, deque] = defaultdict(lambda: deque(maxlen=FEED_LIMIT))
+        self.sequences: dict[str, int] = defaultdict(int)
+        self.feed_lock = threading.Lock()
+        self.transcripts = TranscriptStore()
 
     def _load_knowledge(self):
         try:
@@ -100,7 +107,34 @@ class Runner:
             return None
 
     def _push(self, run_id, item):
-        self.feeds.setdefault(run_id, []).append({**item, "seq": len(self.feeds.get(run_id, []))})
+        activity = normalize(item)
+        if activity is None:
+            return
+        with self.feed_lock:
+            self.sequences[run_id] += 1
+            row = {**activity, "run_id": run_id, "seq": self.sequences[run_id],
+                   "timestamp": timestamp()}
+            self.feeds[run_id].append(row)
+        try:
+            self.transcripts.append(run_id, row)
+        except Exception:
+            pass
+
+    def replay(self, run_id: str, after: int | None = None) -> list[dict]:
+        with self.feed_lock:
+            retained = list(self.feeds.get(run_id, ()))
+        if after is not None:
+            return [r for r in retained if r["seq"] > after]
+        omitted = max(0, self.sequences.get(run_id, 0) - min(len(retained), REPLAY_LIMIT))
+        batch = retained[-REPLAY_LIMIT:]
+        if omitted:
+            batch.insert(0, {"type": "output", "kind": "warning", "state": "warning",
+                             "agent": "omni", "summary": f"{omitted} earlier activities omitted",
+                             "details": [], "line": f"… {omitted} earlier activities omitted",
+                             "collapsible": False, "run_id": run_id,
+                             "seq": batch[0]["seq"] - 1 if batch else 0,
+                             "timestamp": timestamp(), "synthetic": True})
+        return batch
 
     def _on_event(self, row):
         self._push(row["run_id"], {"type": "event", "event": row["event_type"],
@@ -227,22 +261,37 @@ async def api_approve(request):
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse(RUNNER.svc_real.approve_run(rid))
 
+async def api_transcript(request):
+    rid = request.path_params["rid"]
+    if not RUNNER.store.get("runs", rid):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    before = request.query_params.get("before")
+    return JSONResponse(RUNNER.transcripts.page(
+        rid, int(before) if before and before.isdigit() else None,
+        int(request.query_params.get("limit", 500))))
+
 async def api_stream(request):
     rid = request.path_params["rid"]
     if EventSourceResponse is None:
         return JSONResponse({"error": "sse unavailable"}, status_code=500)
 
     async def gen():
-        i = 0
+        last = request.headers.get("last-event-id") or request.query_params.get("after")
+        last = int(last) if last and str(last).isdigit() else None
+        batch = RUNNER.replay(rid, last)
+        if batch:
+            yield {"event": "feed_batch", "data": json.dumps(batch)}
+            last = max(r["seq"] for r in batch if not r.get("synthetic")) if any(
+                not r.get("synthetic") for r in batch) else last
         idle = 0
         while True:
             if await request.is_disconnected():
                 break
-            feed = RUNNER.feeds.get(rid, [])
-            if i < len(feed):
-                while i < len(feed):
-                    yield {"event": "feed", "data": json.dumps(feed[i])}
-                    i += 1
+            feed = RUNNER.replay(rid, last)
+            if feed:
+                for item in feed:
+                    yield {"event": "feed", "id": str(item["seq"]), "data": json.dumps(item)}
+                    last = item["seq"]
                 idle = 0
             else:
                 idle += 1
@@ -260,5 +309,6 @@ routes = [
     Route("/api/runs", api_create, methods=["POST"]),
     Route("/api/runs/{rid}", api_run),
     Route("/api/runs/{rid}/approve", api_approve, methods=["POST"]),
+    Route("/api/runs/{rid}/transcript", api_transcript),
     Route("/api/runs/{rid}/stream", api_stream),
 ]

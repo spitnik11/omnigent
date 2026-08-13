@@ -13,12 +13,16 @@ import subprocess
 import threading
 
 from .adapter import get_adapter
+from ..harness import load_config, load_harnesses
 from .models import (AssignmentStatus, Role, RunStatus, Store, TaskStatus,
                      Verdict, new_id, now)
 from .worktrees import WorktreeManager
 
-AGENTS = ["claude", "codex", "grok"]   # preference order (plan section 34)
+AGENTS = ["claude", "codex", "grok"]   # cloud API agents — the reviewers (plan section 34)
 MIN_APPROVALS = 2                      # plan section 20 (2 of 3)
+# Reliable local implementers to auto-offload IMPLEMENT work to (opendcode/goose stay
+# connected but opt-in via @name until reliable with a local model).
+LOCAL_IMPL = ["aider"]
 
 
 def _slug(s: str) -> str:
@@ -102,10 +106,20 @@ class WorkflowService:
                 if t["status"] in (TaskStatus.PLANNED, TaskStatus.READY)
                 and self._deps_approved(t)]
 
+    def _impl_order(self) -> list[str]:
+        """Implementer preference: reliable free local agents first (offload), then cloud."""
+        try:
+            hs = load_harnesses(load_config())
+        except Exception:  # noqa: BLE001
+            return list(AGENTS)
+        order = [n for n in LOCAL_IMPL if n in hs and hs[n].available]     # offload target(s)
+        order += [a for a in AGENTS if a in hs and hs[a].available]        # cloud (also reviewers)
+        return order or list(AGENTS)
+
     def _pick_agent(self, task: dict, busy: set[str]) -> str | None:
         if task.get("assigned_agent"):
             return task["assigned_agent"] if task["assigned_agent"] not in busy else None
-        for a in AGENTS:
+        for a in self._impl_order():
             if a not in busy:
                 return a
         return None

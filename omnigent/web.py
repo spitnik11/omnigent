@@ -157,6 +157,7 @@ main{display:flex;flex-direction:column;min-width:0;min-height:0}
           <option value="local">Local · implement (free)</option>
           <option value="cloud">Cloud · implement</option>
         </select>
+        <label class="toggle" title="Split the goal into parallel tasks (a planning agent)"><input type="checkbox" id="plan" checked style="width:auto"> auto-plan</label>
         <label class="toggle"><input type="checkbox" id="mock" checked style="width:auto"> demo (mock)</label>
       </div>
       <div class="box">
@@ -183,6 +184,7 @@ const EVMAP={
   RUN_READY:['★','ev accent','ready for review'], RUN_APPROVED:['✓','ev ok','run approved'],
   TASK_FAILED:['✕','ev bad','failed'], REVISION:['↻','ev warn','revision'],
   CONTEXT_RETRIEVED:['◇','ev','knowledge'], MEMORY_WRITTEN:['✎','ev ok','memory saved'],
+  PLAN_STARTED:['◈','ev active','planning…'], PLAN_COMPLETED:['❯','ev accent','plan ready'],
 };
 const STATUSDOT={PLANNING:'◇',RUNNING:'●',REVIEWING:'◈',INTEGRATING:'⇢',
   WAITING_FOR_USER:'★',COMPLETED:'✓',FAILED:'✕',CANCELLED:'✕',
@@ -200,7 +202,9 @@ function renderFeed(item){
     const [g,cls,label]=EVMAP[item.event]||['·','ev',item.event.toLowerCase()];
     const tsk=item.payload&&item.payload.commit?(' '+String(item.payload.commit).slice(0,8)):'';
     const findings=(item.payload&&item.payload.findings||[]).slice(0,2).map(f=>' — '+f).join('');
-    const cnt=(item.event==='CONTEXT_RETRIEVED'&&item.payload&&item.payload.count)?(' · '+item.payload.count+' sources'):'';
+    let cnt='';
+    if(item.event==='CONTEXT_RETRIEVED'&&item.payload&&item.payload.count) cnt=' · '+item.payload.count+' sources';
+    if(item.event==='PLAN_COMPLETED'&&item.payload&&item.payload.tasks) cnt=' · '+item.payload.tasks+' tasks';
     line(`<span class="who sys"></span><span class="txt ${cls}"><span class="g">${g}</span>${esc(label)}${item.agent?(' · '+esc(item.agent)):''}${esc(tsk)}${esc(cnt)}${esc(findings)}</span>`);
   }
 }
@@ -262,7 +266,7 @@ function fmt(n){n=n||0;return n>=1000?(n/1000).toFixed(1)+'k':n;}
 async function send(){
   const goal=$('#goal').value.trim(); if(!goal)return;
   $('#send').disabled=true;
-  const body={goal, project_path:$('#project').value.trim(), mock:$('#mock').checked, mode:$('#mode').value};
+  const body={goal, project_path:$('#project').value.trim(), mock:$('#mock').checked, mode:$('#mode').value, plan:$('#plan').checked};
   const r=await api('/api/runs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   $('#send').disabled=false;
   if(!r){alert('server unreachable');return;}

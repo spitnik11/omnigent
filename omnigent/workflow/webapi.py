@@ -70,7 +70,7 @@ class Runner:
                                    "task": row["task_id"], "agent": row["agent"],
                                    "payload": row["payload"]})
 
-    def start(self, project_path, goal, tasks, mock, mode="local") -> dict:
+    def start(self, project_path, goal, tasks, mock, mode="local", plan=True) -> dict:
         svc = self.svc_mock if mock else self.svc_real
         if not project_path:
             if not mock:
@@ -84,9 +84,6 @@ class Runner:
             base = _git(project_path, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
             proj = svc.create_project(Path(project_path).name, str(project_path), default_branch=base)
         run = svc.create_run(proj["id"], goal, mode=mode)
-        for t in (tasks or [{"title": goal}]):
-            svc.create_task(run["id"], t["title"], description=t.get("description", ""),
-                            agent=t.get("agent"), acceptance_criteria=t.get("acceptance", []))
         if self.knowledge:
             try:
                 self.knowledge.add_repo(proj["name"], proj["repo_path"])
@@ -105,12 +102,37 @@ class Runner:
             self._push(run["id"], {"type": "output", "agent": "omni",
                                    "line": f"Run started: {goal}"})
             try:
+                self._make_tasks(svc, run, proj, goal, tasks, plan, mock, on_line)
                 svc.drive(run["id"], on_line=on_line)
             except Exception as e:  # noqa: BLE001
                 self._push(run["id"], {"type": "output", "agent": "system", "line": f"[error] {e}"})
 
         threading.Thread(target=drive, daemon=True).start()
         return run
+
+    def _make_tasks(self, svc, run, proj, goal, tasks, plan, mock, on_line):
+        """Create the run's tasks: explicit list, auto-planned DAG, or a single goal-task."""
+        if tasks:
+            specs = tasks
+        elif plan:
+            from .planner import plan_goal
+            svc.store.event(run["id"], "PLAN_STARTED", None, "claude", {"goal": goal})
+            specs = plan_goal(goal, proj["repo_path"], mock=mock,
+                              on_line=lambda l: on_line("claude", None, l))
+            svc.store.event(run["id"], "PLAN_COMPLETED", None, "claude",
+                            {"tasks": len(specs), "titles": [s["title"] for s in specs]})
+        else:
+            specs = [{"title": goal}]
+        ids = []
+        for t in specs:
+            deps = [ids[j] for j in (t.get("depends_on") or [])
+                    if isinstance(j, int) and 0 <= j < len(ids)]
+            row = svc.create_task(
+                run["id"], t["title"], description=t.get("description", ""),
+                agent=t.get("agent"),
+                acceptance_criteria=t.get("acceptance") or t.get("acceptance_criteria") or [],
+                depends_on=deps)
+            ids.append(row["id"])
 
     def snapshot(self, run_id) -> dict:
         run = self.store.get("runs", run_id)
@@ -144,8 +166,9 @@ async def api_create(request):
         return JSONResponse({"error": "goal required"}, status_code=400)
     try:
         mode = "cloud" if str(d.get("mode", "local")).lower() == "cloud" else "local"
+        plan = d.get("plan", True) is not False
         run = RUNNER.start(d.get("project_path", "").strip(), goal,
-                           d.get("tasks"), bool(d.get("mock")), mode=mode)
+                           d.get("tasks"), bool(d.get("mock")), mode=mode, plan=plan)
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return JSONResponse(run)

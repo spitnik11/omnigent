@@ -23,6 +23,7 @@ if ((Test-Engine) -and -not (docker ps --format '{{.Names}}' | Select-String 'ol
 }
 
 # env so the local agents resolve + use the right model
+$env:OLLAMA_API_BASE = 'http://localhost:11434'   # aider (litellm) + opencode ollama provider
 $env:GOOSE_PROVIDER = 'ollama'
 $env:GOOSE_MODEL    = 'qwen3:14b'
 $env:PATH = "$env:PATH;C:\Users\losth\.local\bin;C:\Users\losth\AppData\Roaming\npm;C:\Users\losth\AppData\Roaming\Python\Python310\Scripts"
